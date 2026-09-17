@@ -32,37 +32,37 @@ It runs on the .NET Framework that is already part of Windows 10 and 11 and is c
 
 ### Recon & network
 
-#### System Recon & Audit
+#### 🔍 System Recon & Audit
 
 A read-only enumeration of the machine — system, users and groups, network, security posture, persistence surface, running processes and recent security events — with the risky settings flagged and a step strip while it runs. Save the whole report as Markdown, JSON or PDF.
 
 ![System Recon & Audit](docs/screenshots/recon.png)
 
-#### Domain and IP Blocker
+#### 🚫 Domain and IP Blocker
 
 Load domains and IPs from any file or paste (URLs, log lines, CSV, defanged `evil[.]com` forms are all understood), review them as rows, and block or unblock the ones you pick. Domains go to the hosts file, IPs into one firewall rule; the hosts file is backed up before every change.
 
 ![Domain and IP Blocker](docs/screenshots/blocker.png)
 
-#### Reachability Verifier
+#### 📡 Reachability Verifier
 
 For every target: DNS and what it resolves to, an optional ping, and a TCP connect to each port you list, with a timeout and parallelism you choose. Send the ones that answer straight to the blocker.
 
 ![Reachability Verifier](docs/screenshots/reachability.png)
 
-#### Connections Monitor
+#### 🔗 Connections Monitor
 
 Every TCP and UDP endpoint the machine has, refreshed each second: process, PID, addresses, state and remote host name. Closed connections linger greyed for a while so short-lived ones are not missed; block or copy the remote addresses in two clicks.
 
 ![Connections Monitor](docs/screenshots/connections.png)
 
-#### Network Map
+#### 🌍 Network Map
 
 The live connections drawn on a world map, threat-map style. The world is a dense dot grid built from real country shapes embedded in the exe; hover a country to light it up, hover a connection for its ports, protocols and processes. Outbound and inbound arcs are coloured differently, a red pin marks *you are here*, and a sidebar ranks the apps behind the connections with country, destination, port and protocol in real time. Geolocation is opt-in.
 
 ![Network Map](docs/screenshots/network-map.png)
 
-#### Firewall Rules
+#### 🧱 Firewall Rules
 
 Every Windows Firewall rule as a sortable table, with the risky ones flagged — inbound Allow rules open to any address, rules that open all ports, rules not tied to a program — and whether the firewall is actually on for each profile.
 
@@ -70,37 +70,37 @@ Every Windows Firewall rule as a sortable table, with the risky ones flagged —
 
 ### Files & storage
 
-#### Resource Usage
+#### 📈 Resource Usage
 
 Which processes have used the most CPU time, memory and disk I/O since you opened the tool, not just right now, with gauges and per-process trend sparklines. Exited processes stay, greyed, because their totals still count. *Loaded modules…* lists a process's DLLs and flags the unsigned ones.
 
 ![Resource Usage](docs/screenshots/resource-usage.png)
 
-#### Disk Usage
+#### 💽 Disk Usage
 
 Scan a drive or folder and see where the space went: the largest files, the biggest folders, the file types, and the folder tree with sizes. Open, copy or send the ones you pick to the Recycle Bin.
 
 ![Disk Usage](docs/screenshots/disk-usage.png)
 
-#### Deleted Files Finder
+#### 🗑️ Deleted Files Finder
 
 What was permanently deleted on each drive and whether it can come back: the NTFS change journal, the directory tables of exFAT externals read raw, shadow copies, and files emptied from the Recycle Bin. Recover the ones you pick to another drive.
 
 ![Deleted Files Finder](docs/screenshots/deleted-files.png)
 
-#### File Explorer
+#### 📁 File Explorer
 
 Browse the machine, pick files across folders, see each file's Authenticode signature, and act on the whole selection at once: AES-256 encrypt or decrypt, permanent delete, or a secure wipe.
 
 ![File Explorer](docs/screenshots/file-explorer.png)
 
-#### Find Files
+#### 🔎 Find Files
 
 By name or wildcard, or by hash: paste any number of MD5, SHA-1 and SHA-256 hashes of mixed types — a plain list, a log line, JSON or a threat-intel report — or load them from a file, and every match is reported with its algorithm and path while a progress strip shows the walk.
 
 ![Find Files](docs/screenshots/find-files.png)
 
-#### Duplicate Finder
+#### ♻️ Duplicate Finder
 
 Files whose contents are identical, grouped with the space each group wastes. Size first, then a partial hash, then a full hash only where those still collide, so it is fast on large trees. Keep one copy, recycle the rest.
 
@@ -108,13 +108,13 @@ Files whose contents are identical, grouped with the space each group wastes. Si
 
 ### Vulnerabilities & software
 
-#### Vulnerability Management
+#### 🛡️ Vulnerability Management
 
 Which CVEs this machine is exposed to and why: the OS build and hotfixes against Microsoft's monthly releases (build comparison first, KB supersedence second), installed software against the NVD, and what Windows Update is offering right now. CISA KEV and EPSS rank the findings; every one carries its evidence. Feeds are cached so a second scan is quick and an offline scan uses the last copy.
 
 ![Vulnerability Management](docs/screenshots/vulnerabilities.png)
 
-#### Software Inventory
+#### 📦 Software Inventory
 
 Every installed program and its version, read from the uninstall hives (never `Win32_Product`), with the vulnerable ones highlighted by severity, worst CVE, known-exploited status, EPSS and the version to upgrade to. Filter by anything.
 
@@ -122,19 +122,19 @@ Every installed program and its version, read from the uninstall hives (never `W
 
 ### Threat hunting & incident response
 
-#### Autoruns
+#### ▶️ Autoruns
 
 Every place Windows starts a program on its own — run keys, startup folders, scheduled tasks, services, Winlogon, image hijacks, WMI subscriptions — with the program it runs, its signer and a risk flag. Disable, enable or delete entries.
 
 ![Autoruns](docs/screenshots/autoruns.png)
 
-#### Event Log Triage
+#### 📜 Event Log Triage
 
 The event-log records that matter for an incident — failed and successful logons, new services and scheduled tasks, PowerShell script blocks, Defender detections, account changes, cleared logs — over a time range, parsed into account and detail fields and tinted by risk.
 
 ![Event Log Triage](docs/screenshots/event-log.png)
 
-#### Security Checklist
+#### ✅ Security Checklist
 
 A pass-or-fail review of the common endpoint audit items scored out of 100 — accounts, disk encryption, antivirus and EDR, remote access and VPN tools, USB control, firewall, pending reboot — each with its evidence. *Active tests* (a separate button, because it drops a file on purpose) writes the EICAR test file and checks that real-time protection removes it, and reads the application-control policy.
 
@@ -142,19 +142,19 @@ A pass-or-fail review of the common endpoint audit items scored out of 100 — a
 
 ### Secrets & credentials
 
-#### Secrets Scanner
+#### 🔑 Secrets Scanner
 
 Walk a folder or drive for exposed secrets — private keys, cloud API keys, tokens, connection-string and generic passwords in `.env` and config files. Each hit shows the file, line and a masked preview; the whole secret is never put on screen.
 
 ![Secrets Scanner](docs/screenshots/secrets.png)
 
-#### Wi-Fi & Credentials
+#### 📶 Wi-Fi & Credentials
 
 The secrets saved on this machine: Wi-Fi networks with their security type (open, WEP and legacy WPA flagged) and their stored key, plus the Windows Credential Manager vault. Revealing anything is opt-in and confirmed.
 
 ![Wi-Fi & Credentials](docs/screenshots/wifi-credentials.png)
 
-#### Browsing Data
+#### 🌐 Browsing Data
 
 History, downloads, searches and saved passwords from every browser on the machine — Chrome, Edge, Brave, Vivaldi, Opera and Firefox, including the Microsoft Store build — read straight from their databases by a dependency-free SQLite reader written for this app. The Domains view ranks every site by visits; passwords stay masked until revealed.
 
@@ -162,13 +162,13 @@ History, downloads, searches and saved passwords from every browser on the machi
 
 ### Putting it together
 
-#### Findings Map
+#### 🕸️ Findings Map
 
 The machine at the centre of a live force-directed graph, wired to everything the tools found: users, network, software, autoruns, firewall, Wi-Fi, browsers, the checklist and any vulnerabilities. Drag a node and it stays where you drop it, right-click to release it, *Reformat* to re-flow, scroll to zoom. Red branches show where to look first.
 
 ![Findings Map](docs/screenshots/findings-map.png)
 
-#### About & Guide
+#### ℹ️ About & Guide
 
 What each tool does, grouped by job; click any entry to open it.
 
