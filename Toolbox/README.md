@@ -76,6 +76,8 @@ installer: it runs on the .NET Framework that is already part of Windows 10 and 
 
 ### 1 · 🚫 Domain and IP Blocker
 
+![Domain and IP Blocker](../docs/screenshots/blocker.png)
+
 Load domains and IPs from any file (*Add from file…*), a paste (*Paste…*) or by typing (*Add entry*).
 The extractor pulls hosts out of URLs, log lines, CSV cells, prose and defanged forms
 (`evil[.]com`, `hxxps://`), keeps the source line number, and drops file names that look like
@@ -98,12 +100,16 @@ the hosts-file backups (`%ProgramData%\BlockHosts\backups`) and restores one; *F
 
 ### 2 · 📡 Reachability Verifier
 
+![Reachability Verifier](../docs/screenshots/reachability.png)
+
 Same loaders. For every target: DNS (and what it resolves to), an optional ping, and a TCP connect
 to each port you list (`443, 80, 8443`), with a timeout and a parallelism you choose. Status is
 **reachable**, **ping only**, **resolves**, **unreachable** or **no DNS**; each port gets its own
 column with the connect time. *Send to blocker* hands the ticked rows to tool 1.
 
 ### 3 · 🔗 Connections Monitor
+
+![Connections Monitor](../docs/screenshots/connections.png)
 
 Every TCP and UDP endpoint (v4 and v6) the machine has, refreshed every second: protocol, process,
 PID, local and remote address and port, state, remote host name (reverse DNS in the background),
@@ -113,6 +119,8 @@ sends the ticked rows' addresses to the blocker; *Copy remote IPs* puts them on 
 
 ### 4 · 📈 Resource Usage
 
+![Resource Usage](../docs/screenshots/resource-usage.png)
+
 Three gauges (CPU, memory, disk I/O) with sparklines, and one row per process (or per process
 name when *group by name* is ticked): CPU %, CPU time since you opened the tool, share of all CPU
 time, a trend sparkline, memory and its peak, bytes read and written. Exited processes stay,
@@ -121,12 +129,16 @@ greyed, because what they used still counts. *Reset counters* starts the account
 
 ### 5 · 💽 Disk Usage
 
+![Disk Usage](../docs/screenshots/disk-usage.png)
+
 Pick a drive or a folder and a minimum file size, then *Scan*. **Show** switches between the
 largest files, the biggest folders and the file types; the **tree** view is the folder tree with
 sizes and each folder's share of its parent. Actions on ticked rows: *Open in Explorer*, *Copy
 paths*, *Move to Recycle Bin…* (asks first; the bin, so it is reversible).
 
 ### 6 · 🗑️ Deleted Files Finder
+
+![Deleted Files Finder](../docs/screenshots/deleted-files.png)
 
 What was deleted on each drive in the last *n* days and whether it can come back. Sources: the NTFS
 change journal (needs administrator rights), the directory tables of exFAT drives read raw (no
@@ -140,6 +152,8 @@ data is still intact, or NTFS files still held in a shadow copy; the change jour
 not the data.
 
 ### 7 · 📁 File Explorer
+
+![File Explorer](../docs/screenshots/file-explorer.png)
 
 A two-pane browser: a folder tree on the left, the current folder's files on the right, with a path
 box, *Up*, *Refresh*, *New folder* and *show hidden*. The file list is the same view as everywhere
@@ -159,6 +173,8 @@ files show amber. The actions on the ticked files:
 
 ### 8 · 🔎 Find Files
 
+![Find Files](../docs/screenshots/find-files.png)
+
 One panel, two modes.
 
 - **By name** — type a full or partial name, or a `*.ext` / `data????.csv` wildcard, pick a drive or
@@ -177,6 +193,8 @@ name and hash searches show a **live progress strip**: folders walked, files see
 being read, with the elapsed time.
 
 ### 9 · 🛡️ Vulnerability Management
+
+![Vulnerability Management](../docs/screenshots/vulnerabilities.png)
 
 The goal of the *patchproof* project, for this machine, offline-capable:
 
@@ -208,6 +226,8 @@ No administrator rights are needed for any of this.
 
 ### 10 · 📦 Software Inventory
 
+![Software Inventory](../docs/screenshots/software-inventory.png)
+
 Every program installed on this machine — name, version, publisher, install date, scope — read from the
 uninstall registry hives (64-bit, 32-bit and per-user), never `Win32_Product`. *Scan for CVEs* then looks
 up each program that is in the CVE product map against the NVD at its exact version and flags the
@@ -222,6 +242,8 @@ versions*, *Open on NVD*, *Export*. It shares the NVD key and the feed cache wit
 so if you scanned there already, this is instant.
 
 ### 11 · ✅ Security Checklist
+
+![Security Checklist](../docs/screenshots/checklist.png)
 
 A pass or fail review of the most common endpoint audit items, scored out of 100, each check showing
 its evidence. It covers:
@@ -248,6 +270,8 @@ failing.
 
 ### 12 · 🧱 Firewall Rules
 
+![Firewall Rules](../docs/screenshots/firewall.png)
+
 Every Windows Firewall rule as a sortable table, with the risky ones flagged — inbound **Allow** rules open
 to **any** remote address, rules that open **all ports**, and rules not tied to a program (worse on the
 public profile). The stat bar shows whether the firewall is actually **on** for each profile and its default
@@ -255,12 +279,16 @@ inbound action. Filter to *risky only*, a direction, or *enabled only*.
 
 ### 13 · ♻️ Duplicate Finder
 
+![Duplicate Finder](../docs/screenshots/duplicate-finder.png)
+
 Find files whose **contents** are identical: group by size, then a partial hash, then a full SHA-256 only
 where those still collide — so it is fast even on large trees. Each group shows the space it wastes; the
 oldest copy is marked *keep*. *Select all but newest per group*, then send the rest to the **Recycle Bin**
 (reversible).
 
 ### 14 · ▶️ Autoruns
+
+![Autoruns](../docs/screenshots/autoruns.png)
 
 Every place Windows starts a program on its own — **run keys** and RunOnce, **startup folders**, **scheduled
 tasks**, **services**, **Winlogon**, **image hijacks** (IFEO/SilentProcessExit), **AppInit DLLs**, **boot
@@ -272,6 +300,8 @@ Needs administrator rights to change machine-wide entries.
 
 ### 15 · 📜 Event Log Triage
 
+![Event Log Triage](../docs/screenshots/event-log.png)
+
 The security-relevant records from the Windows event logs over a time range: **failed and successful
 logons**, explicit-credential and special-privilege logons, **account lockouts** and changes, **new
 services** (7045/4697) and **scheduled tasks** (4698), **PowerShell script blocks** (4104), **Defender
@@ -280,12 +310,16 @@ account and detail fields and tinted by risk. Reading the Security log needs adm
 
 ### 16 · 🔑 Secrets Scanner
 
+![Secrets Scanner](../docs/screenshots/secrets.png)
+
 Walk a folder or drive for **exposed secrets** — private keys (PEM/PuTTY), AWS/Google/GitHub/Slack/Stripe
 keys, JWTs, bearer tokens, connection-string and generic passwords — in `.env` and config files. Each hit
 shows the file, line, kind and a **masked preview**; the whole secret is never put on screen. High-entropy
 filtering and a placeholder skip cut the obvious false positives.
 
 ### 17 · 📶 Wi-Fi & Credentials
+
+![Wi-Fi & Credentials](../docs/screenshots/wifi-credentials.png)
 
 The secrets saved on this machine: **Wi-Fi profiles** with their security type — **open**, **WEP** and
 legacy **WPA** are flagged — and, when elevated, the stored key; plus the **Windows Credential Manager
@@ -300,6 +334,8 @@ process's DLLs and flags the unsigned ones, and **Autoruns** verifies every auto
 
 ### · 🌍 Network Map
 
+![Network Map](../docs/screenshots/network-map.png)
+
 This machine's **live connections on a world map**, in the style of the big threat maps. The world is a
 dense grid of small dots drawn from **real country shapes** (Natural Earth polygons rasterized and packed
 into ~19 KB inside the exe — nothing is downloaded to draw it), with country **borders** picked out in
@@ -313,6 +349,8 @@ service (the one place this tool uses the network) and cached to disk.
 
 ### 20 · 🌐 Browsing Data
 
+![Browsing Data](../docs/screenshots/browsing-data.png)
+
 History, downloads, searches and **saved passwords** from every browser on this machine — Chrome, Edge,
 Brave, Vivaldi, Opera and **Firefox** (classic and Microsoft Store builds) — read straight from their SQLite stores by a small **dependency-free
 SQLite reader** written for this app (no external library). Switch between **History** (URL, title, visit
@@ -324,6 +362,8 @@ through the NSS library it ships. Entries protected by newer **app-bound encrypt
 or a Firefox master password can't be shown and say so.
 
 ### 19 · 🕸️ Findings Map
+
+![Findings Map](../docs/screenshots/findings-map.png)
 
 *Now a live **force-directed** graph — nodes repel, edges pull, a gentle gravity centres it, so it settles smoothly and every node can be dragged. Each node is a themed **icon** (the endpoint a monitor, Firewall a brick wall, Wi-Fi signal arcs, Vulnerabilities a shield…), tinted by severity. It captures the newer tools too: autoruns, firewall, Wi-Fi, browsers and recent events. Every node is a small flat icon in one theme colour; **drag a node and it stays where you drop it**, right-click to release it, and **Reformat** re-flows the whole map. Big groups fan out so many items stay readable.*
 
