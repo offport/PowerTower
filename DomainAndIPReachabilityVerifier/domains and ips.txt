@@ -1,0 +1,55 @@
+# Sample input for Test-Reachability — deliberately messy
+# Comment lines and prose are fine; the extractor ignores anything that isn't a host.
+
+# --- plain, one per line ---
+google.com
+github.com
+api.github.com
+instagram.com
+facebook.com
+1.1.1.1
+8.8.8.8
+
+# --- inside URLs ---
+https://www.cloudflare.com/learning/
+http://neverssl.com/index.html
+https://raw.githubusercontent.com/user/repo/main/file.txt
+ftp://ftp.gnu.org/gnu/
+
+# --- host:port pairs (the port gets tested automatically, on top of your chosen ports) ---
+smtp.gmail.com:587
+db.internal.example.com:5432
+10.20.30.40:8443
+time.windows.com:123
+
+# --- buried in log-style lines ---
+2026-09-14 22:03:11 INFO  connection established to cdn.jsdelivr.net from 192.168.1.55
+Sep 14 22:03:12 host sshd[2211]: Accepted publickey for user from 203.0.113.9 port 51022
+[error] upstream timed out while connecting to api.stripe.com (52.10.20.30)
+
+# --- inside an email address and some prose ---
+Contact the admin at ops@mail.protonmail.com if the outage continues.
+The vendor said their status page lives at status.datadoghq.com these days.
+
+# --- defanged indicators, like a threat-intel report ---
+hxxps://malware-example[.]com/payload
+evil-domain(.)net
+bad{dot}actor{dot}org
+c2server[.]io[:]4444
+attacker\.example\.com
+phish  dot  example  dot  com
+
+# --- IPv6 ---
+2606:4700:4700::1111
+[2001:4860:4860::8888]:53
+
+# --- CSV-style line (extractor reads csv as text too) ---
+"webserver-01","prod","93.184.216.34","443,80","active"
+
+# --- things that should NOT be extracted (sanity check) ---
+README.md
+build_script.ps1
+version 12.04.2
+just a sentence with no hosts in it at all
+localhost
+127.0.0.1

@@ -1,0 +1,13 @@
+# per-machine state and downloaded data - never commit
+Toolbox/settings.ini
+Toolbox/cache/
+Toolbox/crash.log
+Toolbox/*.bak
+Toolbox/selftest*.txt
+
+# build outputs (Toolbox/PowerTower.exe is committed on purpose: it is the portable deliverable)
+Toolbox/Tests.exe
+Toolbox/*-new.exe
+
+Thumbs.db
+desktop.ini

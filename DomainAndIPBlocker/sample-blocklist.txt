@@ -1,0 +1,43 @@
+# Sample block list for Block-Hosts
+# Lines starting with # are ignored. Prose and junk around entries is fine.
+# Domains → hosts file (0.0.0.0). IPs → Windows Firewall outbound block rule.
+
+# --- ad / tracking domains (bare names — the www. variant is added automatically) ---
+doubleclick.net
+googlesyndication.com
+scorecardresearch.com
+adservice.google.com
+
+# --- SUBDOMAINS must be listed explicitly (the hosts file has no wildcard) ---
+# blocking doubleclick.net above does NOT block these — list the ones you care about:
+ads.doubleclick.net
+stats.g.doubleclick.net
+pagead2.googlesyndication.com
+
+# --- a couple of test domains you can safely verify with ---
+example-tracker.com
+metrics.example.net
+
+# --- domains hidden in URLs / log lines (extractor pulls the host out) ---
+https://analytics.badvendor.io/collect?id=123
+2026-09-14 12:00:01 blocked beacon to telemetry.snooping.co from app
+
+# --- defanged, as you'd copy from a threat report ---
+hxxps://malware-c2[.]net/gate.php
+phish-kit(.)com
+
+# --- IPs → firewall (the hosts file cannot block these) ---
+203.0.113.45
+198.51.100.7
+192.0.2.200
+
+# --- IP with noise around it ---
+"c2-node","suspicious","185.220.101.4","seen 2026-09-13"
+
+# --- IPv6 ---
+2001:db8:dead:beef::1
+
+# --- ignored on purpose (not real hosts) ---
+notes.md
+setup.ps1
+localhost
