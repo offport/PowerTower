@@ -69,6 +69,24 @@ namespace PSTools
             col.Example("--plain --modules inventory,network").Example("--engagement C:\\eng\\acme.json --out C:\\eng\\ws01.ptb").Example("--pass \"long passphrase\" --ioc iocs.txt --modules inventory,persistence,network,ioc");
             l.Add(col); l[l.Count - 1].Run = Collect_;
 
+            l.Add(new CliTool("enrich").Opt("in", "file", "the bundle to enrich (or give it as the first argument)").Opt("out", "file", "where to write the enriched bundle (default: <in>.enriched.ptb)")
+                .Opt("pass", "passphrase", "the passphrase the bundle was sealed with; the output is sealed with it too").Opt("key", "file", "the engagement private key as RSA XML; the output is re-sealed to the same key pair").Opt("engagement", "file", "engagement.json: opens with the DPAPI-protected engagement.key beside it, re-seals to the engagement key").Opt("plain", null, "the bundle is unsealed; the output is written unsealed too")
+                .Opt("cache", "folder", "the feed cache to use (default: the cache next to the exe)").Opt("offline", null, "never touch the network: use the feed pack as it is and fail on a feed that is not there").Opt("no-msrc", null, "skip Microsoft's monthly CVEs").Opt("no-nvd", null, "skip third-party software (NVD)").Opt("no-kev", null, "skip CISA KEV").Opt("no-epss", null, "skip EPSS")
+                .Opt("months", "n", "the fewest MSRC releases to check; widened to the bundle's patch level, up to 36 (default from settings, else 3)").Opt("nvd-key", "key", "an NVD API key for faster third-party lookups").Opt("status", "open|all", "which findings to list (default open)").Opt("log", null, "print the enrichment log").Opt("json", "file", "also write the enriched bundle as pretty JSON, unsealed, for inspection")
+                .Example("ws01.ptb --engagement C:\\eng\\acme.json").Example("--in ws01.ptb --pass \"long passphrase\" --offline --cache D:\\feedpack").Example("ws01.ptb --plain --status all --csv ws01-findings.csv"));
+            l[l.Count - 1].Run = Enrich_; l[l.Count - 1].Tables = delegate { return new List<TableDef>(new TableDef[] { Columns.Findings() }); };
+
+            l.Add(new CliTool("feeds").Opt("export", "folder", "copy every cached feed into this folder as a feed pack, with a manifest (name, size, SHA-256, time per file)").Opt("import", "folder", "copy a feed pack into the cache, keeping each file's original time; files whose SHA-256 does not match the manifest are refused")
+                .Opt("cache", "folder", "the cache to export from or import into (default: the cache next to the exe)").Opt("no-verify", null, "import without checking the SHA-256s")
+                .Example("").Example("--export D:\\feedpack-2026-10-13").Example("--import D:\\feedpack-2026-10-13 --cache C:\\analyst\\cache"));
+            l[l.Count - 1].Run = Feeds_;
+
+            l.Add(new CliTool("engagement").Opt("out", "folder", "new: where engagement.json and engagement.key are written (default: the current folder)").Opt("id", "id", "new: the engagement id, e.g. ENG-2026-014 (letters, digits, - _ .)").Opt("client", "name", "new: the client").Opt("operator", "name", "new: who runs it (default: you)")
+                .Opt("scope", "list", "new: hosts, IPs or CIDRs that may be audited - repeatable or comma-separated; nothing outside it is ever touched").Opt("from", "utc", "new: the window opens (2026-10-01 or 2026-10-01T09:00Z)").Opt("to", "utc", "new: the window closes").Opt("modules", "list", "new: the modules a collector may run (default: every read-only module)")
+                .Opt("retention", "days", "new: how long collected data is kept (default 90)").Opt("notes", "text", "new: free text").Opt("bits", "2048|3072|4096", "new: RSA key size (default 3072)").Opt("file", "file", "inspect / check: the engagement.json (or give it as the second argument)").Opt("host", "name or ip", "check: is this target in scope right now?")
+                .Example("new --out C:\\eng\\acme --id ENG-2026-014 --client Acme --scope 10.0.0.0/24,ws-fin-01 --from 2026-10-01 --to 2026-10-31").Example("inspect C:\\eng\\acme\\engagement.json").Example("check C:\\eng\\acme\\engagement.json --host 10.0.0.205"));
+            l[l.Count - 1].Run = Engagement_;
+
             l.Add(new CliTool("firewall").Opt("inbound", null, "inbound rules only").Opt("outbound", null, "outbound rules only").Opt("risky", null, "flagged rules only").Opt("enabled", null, "enabled rules only")
                 .Example("--risky").Example("--inbound --enabled --where \"action equals allow\" --sort name"));
             l[l.Count - 1].Run = Firewall_; l[l.Count - 1].Tables = delegate { return new List<TableDef>(new TableDef[] { Columns.FirewallRules() }); };
@@ -371,6 +389,100 @@ namespace PSTools
             int failed = CollectOptions.Failed(b);
             Out.Ok("bundle " + new FileInfo(outPath).Length.ToString("N0") + " bytes · " + key.Mode + " · sha256 " + BundleCrypto.FileSha256(outPath) + " → " + Path.GetFullPath(outPath) + (failed > 0 ? " · " + failed + " module(s) partial or failed" : ""));
             return failed > 0 ? Cli.PROBLEMS : Cli.OK;
+        }
+
+        // ═══════════════════════════════ Enrich (bundle in, findings out) ═══════════════════════════
+        /// <summary>How a sealed bundle opens and how what we write back is sealed, from exactly one of --pass / --key / --engagement / --plain.</summary>
+        static void BundleKeys(Args a, out BundleKey open, out BundleKey seal, out Engagement eng)
+        {
+            eng = null; int n = (a.Has("pass") ? 1 : 0) + (a.Has("key") ? 1 : 0) + (a.Has("engagement") ? 1 : 0) + (a.Has("plain") ? 1 : 0);
+            if (n != 1) throw new UsageException("say how the bundle is sealed: exactly one of --pass <passphrase>, --key <private key xml>, --engagement <engagement.json>, --plain");
+            if (a.Has("pass")) { open = seal = BundleKey.FromPassphrase(a.Get("pass", "")); return; }
+            if (a.Has("plain")) { open = seal = BundleKey.None(); return; }
+            string priv;
+            if (a.Has("key")) { string f = a.Get("key", ""); if (!File.Exists(f)) throw new UsageException("--key: no such file: " + f); priv = File.ReadAllText(f, Encoding.UTF8).Trim(); if (!priv.StartsWith("<RSAKeyValue")) throw new UsageException("--key: expected an RSA private key in XML; for a DPAPI-protected engagement.key use --engagement"); }
+            else { string ef = a.Get("engagement", ""); if (!File.Exists(ef)) throw new UsageException("--engagement: no such file: " + ef); eng = Engagement.Load(ef); string kf = Engagement.KeyFileFor(ef); if (!File.Exists(kf)) throw new UsageException("--engagement: no " + Path.GetFileName(kf) + " beside " + ef); priv = Engagement.PrivateKey(eng, kf); }
+            open = BundleKey.WithPrivate(priv); seal = BundleKey.ToPublic(BundleCrypto.PublicOf(priv));
+        }
+        static int Enrich_(Args a)
+        {
+            ToolInfo info = Tools.ByKey("enrich"); Out.Header(info);
+            string inPath = a.Get("in", a.Positional.Count > 0 ? a.Positional[0] : null); if (inPath == null) throw new UsageException("--in <bundle.ptb>, or give the bundle as the first argument"); if (!File.Exists(inPath)) throw new UsageException("--in: no such file: " + inPath);
+            BundleKey open, seal; Engagement eng; BundleKeys(a, out open, out seal, out eng);
+            Bundle b; try { b = Bundle.Load(inPath, open); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+            FeedCache cache = a.Has("cache") ? new FeedCache(Cli.FullFolder(a.Get("cache", ""))) : Cli.OpenCache(); cache.Offline = a.Has("offline");
+            if (cache.Offline && !Directory.Exists(cache.Dir)) throw new UsageException("--cache: no such folder: " + cache.Dir);
+            Settings st = Cli.S; string key = a.Get("nvd-key", st.Get("vuln.key", "")).Trim();
+            VulnEnrich e; try { e = EnrichBundle.From(b, cache); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+            e.NvdApiKey = key; e.DoMsrc = !a.Has("no-msrc"); e.DoNvd = !a.Has("no-nvd"); e.DoKev = !a.Has("no-kev"); e.DoEpss = !a.Has("no-epss");
+            int months; if (!int.TryParse(a.Get("months", st.Get("vuln.months", "3")), out months) || months < 1 || months > 12) months = 3; e.Months = months;
+            Out.Note("bundle " + b.Host + " · run " + b.RunId + " · build " + e.Os.FullBuild + " · " + e.Software.Count + " programs · newest update " + (e.NewestUpdate.HasValue ? e.NewestUpdate.Value.ToString("yyyy-MM-dd") : "not dated") + " · feeds: " + (cache.Offline ? "offline pack " : "") + cache.Dir);
+            Throttle th = new Throttle(200); e.Progress = delegate (string m) { th.Say(m); }; e.Step += delegate (string label, string state, string note) { if (state == "running") Out.Note("· " + label); else if (state == "done" || state == "failed") Out.Note("  " + label + ": " + state + (note != null ? " · " + note : "")); }; e.Cancelled = delegate { return Cli.Cancelled; };
+            e.Run(); EnrichBundle.Apply(b, e);
+            string outPath = a.Get("out", null); if (outPath == null) outPath = inPath.EndsWith(".ptb", StringComparison.OrdinalIgnoreCase) ? inPath.Substring(0, inPath.Length - 4) + ".enriched.ptb" : inPath + ".enriched.ptb";
+            try { b.Save(outPath, seal); if (a.Has("json")) File.WriteAllText(a.Get("json", ""), b.ToJson(true), new UTF8Encoding(false)); }
+            catch (Exception ex) { if (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException) throw new UsageException("--out: cannot write " + outPath + ": " + ex.Message); throw; }
+            List<Finding> fs = e.Findings; int crit = 0, high = 0, kev = 0, open_ = 0; foreach (Finding f in fs) { if (!f.Open) continue; open_++; if (f.SeverityNorm == "Critical") crit++; else if (f.SeverityNorm == "High") high++; if (f.Kev || f.Exploited) kev++; }
+            object msrc = Json.Get(e.AsOf, "msrc"), kv = Json.Get(e.AsOf, "kev"), ep = Json.Get(e.AsOf, "epss");
+            Out.Cards("OS build", e.Os.FullBuild, "MSRC window", e.MsrcWindowUsed + " release(s)", "open", T(open_.ToString(), GoodIfZero(open_)), "critical", T(crit.ToString(), GoodIfZero(crit)), "high", T(high.ToString(), GoodIfZero(high)), "known exploited", T(kev.ToString(), GoodIfZero(kev)), "total", fs.Count);
+            Out.Line("  as of: MSRC " + string.Join(", ", e.Releases.ToArray()) + (kv != null ? " · KEV " + (Json.GetS(kv, "catalogVersion") ?? Json.GetS(kv, "cached") ?? "?") : "") + (ep != null && (Json.GetS(ep, "dates") ?? "").Length > 0 ? " · EPSS " + Json.GetS(ep, "dates") : "") + (msrc != null ? " · newest update " + (Json.GetS(msrc, "newestUpdate") ?? "not dated") : ""), Tone.Dim);
+            View v = new View(Columns.Findings()); string status = a.Choice("status", "open", "open", "all"); v.Filter = delegate (object o) { return status == "all" || ((Finding)o).Open; }; v.Configure(a); v.Set(Cli.Boxed(fs)); v.Show(a);
+            if (a.Has("log")) PrintLog("enrichment log", e.Errors, e.Log); else if (e.Errors.Count > 0) Out.Warn(e.Errors.Count + " problem(s) during enrichment - add --log to see them.");
+            Out.Ok("enriched bundle " + new FileInfo(outPath).Length.ToString("N0") + " bytes · sealed: " + seal.Mode + " → " + Path.GetFullPath(outPath));
+            return Cli.Cancelled ? Cli.CANCELLED : e.Errors.Count > 0 ? Cli.PROBLEMS : Cli.OK;
+        }
+
+        // ═══════════════════════════════ Feeds (the feed pack) ═══════════════════════════
+        static int Feeds_(Args a)
+        {
+            ToolInfo info = Tools.ByKey("feeds"); Out.Header(info);
+            FeedCache cache = a.Has("cache") ? new FeedCache(Cli.FullFolder(a.Get("cache", ""))) : Cli.OpenCache();
+            if (a.Has("export") && a.Has("import")) throw new UsageException("--export or --import, not both");
+            if (a.Has("export"))
+            {
+                string dir = Cli.FullFolder(a.Get("export", "")); FeedPack.Result r;
+                try { r = FeedPack.Export(cache, dir); } catch (Exception ex) { if (ex is IOException || ex is UnauthorizedAccessException) throw new UsageException("--export: cannot write " + dir + ": " + ex.Message); throw; }
+                Out.Ok("feed pack: " + r.Files + " file(s), " + FeedPack.Size(r.Bytes) + " → " + dir + " (" + FeedPack.ManifestName + " lists every file with its SHA-256 and time)"); return Cli.OK;
+            }
+            if (a.Has("import"))
+            {
+                string dir = Cli.FullFolder(a.Get("import", "")); if (!Directory.Exists(dir)) throw new UsageException("--import: no such folder: " + dir); FeedPack.Result r;
+                try { r = FeedPack.Import(dir, cache, !a.Has("no-verify")); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+                foreach (string p in r.Problems) Out.Warn(p);
+                Out.Ok("imported " + r.Files + " file(s), " + FeedPack.Size(r.Bytes) + " into " + cache.Dir + (r.Skipped > 0 ? " · " + r.Skipped + " refused" : "")); return r.Skipped > 0 ? Cli.PROBLEMS : Cli.OK;
+            }
+            foreach (string line in FeedPack.Status(cache)) Out.Line("  " + line); return Cli.OK;
+        }
+
+        // ═══════════════════════════════ Engagement (scope, window, keys) ═══════════════════════════
+        static int Engagement_(Args a)
+        {
+            ToolInfo info = Tools.ByKey("engagement"); Out.Header(info);
+            string verb = a.Positional.Count > 0 ? a.Positional[0].ToLowerInvariant() : ""; if (verb != "new" && verb != "inspect" && verb != "check") throw new UsageException("engagement new --out <folder> --id <id> --scope <list> … | engagement inspect <engagement.json> | engagement check <engagement.json> --host <name or ip>");
+            if (verb == "new")
+            {
+                string dir = Cli.FullFolder(a.Get("out", Directory.GetCurrentDirectory())); DateTime? from = UtcDate(a, "from"), to = UtcDate(a, "to");
+                List<string> scope = new List<string>(); foreach (string s in a.All("scope")) scope.AddRange(s.Split(',')); List<string> mods = new List<string>(); foreach (string s in a.All("modules")) mods.AddRange(s.Split(','));
+                int ret; if (!int.TryParse(a.Get("retention", "90"), out ret) || ret < 1) throw new UsageException("--retention: a number of days, at least 1"); int bits = int.Parse(a.Choice("bits", "3072", "2048", "3072", "4096"));
+                if (!a.Has("id")) throw new UsageException("--id is required (e.g. ENG-2026-014)"); if (scope.Count == 0) throw new UsageException("--scope is required: host names, IPs or CIDRs, repeatable or comma-separated");
+                Engagement e; try { e = EngagementTool.New(dir, a.Get("id", ""), a.Get("client", ""), a.Get("operator", Environment.UserName), scope, from, to, mods, ret, a.Get("notes", ""), bits); } catch (BundleException ex) { throw new UsageException(ex.Message); }
+                foreach (string l in EngagementTool.Inspect(e)) Out.Line("  " + l);
+                Out.Ok("written " + e.File + " and " + Path.GetFileName(Engagement.KeyFileFor(e.File)) + " - the private key is DPAPI-protected for " + Environment.UserDomainName + "\\" + Environment.UserName + " on this machine; keep a backup of the folder");
+                return Cli.OK;
+            }
+            string file = a.Get("file", a.Positional.Count > 1 ? a.Positional[1] : null); if (file == null) throw new UsageException("engagement " + verb + " <engagement.json>"); if (!File.Exists(file)) throw new UsageException("no such file: " + file);
+            Engagement eng; try { eng = Engagement.Load(file); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+            if (verb == "inspect") { foreach (string l in EngagementTool.Inspect(eng)) Out.Line("  " + l); return eng.Validate().Count == 0 ? Cli.OK : Cli.PROBLEMS; }
+            string host = a.Get("host", null); if (host == null) throw new UsageException("check needs --host <name or ip>");
+            string why; bool ok = eng.InScope(host, out why); string whyW; bool inWin = eng.InWindow(DateTime.UtcNow, out whyW);
+            Out.Line("  " + host + ": " + (ok ? "in scope" : "OUT OF SCOPE - " + why), ok ? Tone.Good : Tone.Bad); Out.Line("  window: " + (inWin ? "open now" : whyW), inWin ? Tone.Good : Tone.Warn);
+            return ok && inWin ? Cli.OK : Cli.PROBLEMS;
+        }
+        static DateTime? UtcDate(Args a, string name)
+        {
+            if (!a.Has(name)) return null; DateTime d;
+            if (!DateTime.TryParse(a.Get(name, ""), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out d)) throw new UsageException("--" + name + ": give a UTC date like 2026-10-01 or 2026-10-01T09:00Z");
+            return d;
         }
 
         static int Firewall_(Args a)

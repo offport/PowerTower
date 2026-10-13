@@ -123,6 +123,8 @@ namespace PSTools
     public class FeedCache
     {
         public readonly string Dir;
+        /// <summary>Never touch the network: serve the cached copy whatever its age, fail when there is none. For feed packs on air-gapped boxes and for deterministic tests.</summary>
+        public bool Offline;
         public FeedCache(string dir) { Dir = dir; try { Directory.CreateDirectory(dir); } catch { } }
         public string PathOf(string name) { return Path.Combine(Dir, name); }
         public string Read(string name, TimeSpan maxAge) { try { string p = PathOf(name); if (!File.Exists(p)) return null; if (DateTime.UtcNow - File.GetLastWriteTimeUtc(p) > maxAge) return null; return File.ReadAllText(p, Encoding.UTF8); } catch { return null; } }
@@ -134,6 +136,7 @@ namespace PSTools
         /// <summary>Fetch through the cache: a fresh file wins, else the network, else a stale file (offline) with a note.</summary>
         public string Fetch(string name, string url, Dictionary<string, string> headers, TimeSpan maxAge, int timeoutMs, out string note)
         {
+            if (Offline) { string any = ReadAny(name); if (any != null) { note = "offline pack · copy from " + Stamp(name).Value.ToString("yyyy-MM-dd HH:mm"); return any; } throw new InvalidOperationException("offline: the feed pack has no copy of " + name); }
             note = ""; string t = Read(name, maxAge); if (t != null) { note = "cached " + Stamp(name).Value.ToString("yyyy-MM-dd HH:mm"); return t; }
             try { t = Http.Get(url, headers, timeoutMs); Write(name, t); note = "downloaded"; return t; }
             catch (Exception ex) { string stale = ReadAny(name); if (stale != null) { note = "offline, using the copy from " + Stamp(name).Value.ToString("yyyy-MM-dd") + " (" + ex.Message + ")"; return stale; } throw; }
@@ -451,6 +454,7 @@ namespace PSTools
             string canon = Ver.Canon(version); if (canon == null) throw new FormatException("version '" + version + "' is not comparable");
             string name = CacheName(vendor, product, canon); string cached = cache == null ? null : cache.Read(name, TimeSpan.FromHours(24));
             if (cached != null) { note = "cached " + cache.Stamp(name).Value.ToString("yyyy-MM-dd HH:mm"); return Parse(cached); }
+            if (cache != null && cache.Offline) { string any = cache.ReadAny(name); if (any == null) throw new InvalidOperationException("offline: the feed pack has no NVD record for " + vendor + ":" + product + " " + canon); note = "offline pack · copy from " + cache.Stamp(name).Value.ToString("yyyy-MM-dd HH:mm"); return Parse(any); }
             bool keyed = !string.IsNullOrEmpty(apiKey); Dictionary<string, string> h = new Dictionary<string, string>(); if (keyed) h["apiKey"] = apiKey.Trim();
             string match = Uri.EscapeDataString("cpe:2.3:a:" + vendor + ":" + product); List<object> all = new List<object>(); int start = 0, total = 0; const int page = 500; StringBuilder raw = new StringBuilder();
             while (true)
@@ -591,17 +595,23 @@ namespace PSTools
     public static class Epss
     {
         public const string Base = "https://api.first.org/data/v1/epss";
-        public static Dictionary<string, double> Scores(IEnumerable<string> cves, FeedCache cache, Action<string> progress)
+        public static Dictionary<string, double> Scores(IEnumerable<string> cves, FeedCache cache, Action<string> progress) { string asOf; return Scores(cves, cache, progress, out asOf); }
+        static List<string> Sorted(IEnumerable<string> cves) { List<string> u = new List<string>(new HashSet<string>(cves, StringComparer.OrdinalIgnoreCase)); u.Sort(StringComparer.OrdinalIgnoreCase); return u; }
+        /// <summary>The cache file the first batch of these CVEs is kept in - so a feed pack or a test can be seeded for exactly this request.</summary>
+        public static string CacheName(IEnumerable<string> cves) { List<string> u = Sorted(cves); List<string> batch = u.GetRange(0, Math.Min(100, u.Count)); return "epss-" + Hash(string.Join(",", batch.ToArray())) + ".json"; }
+        /// <summary>asOf: the scoring date the responses carried ("2026-10-12", or "a..b" when batches differ), empty when none.</summary>
+        public static Dictionary<string, double> Scores(IEnumerable<string> cves, FeedCache cache, Action<string> progress, out string asOf)
         {
-            Dictionary<string, double> d = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase); List<string> u = new List<string>(new HashSet<string>(cves, StringComparer.OrdinalIgnoreCase)); u.Sort(StringComparer.OrdinalIgnoreCase);
+            string minD = null, maxD = null;
+            Dictionary<string, double> d = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase); List<string> u = Sorted(cves);
             for (int i = 0; i < u.Count; i += 100)
             {
                 List<string> batch = u.GetRange(i, Math.Min(100, u.Count - i)); string joined = string.Join(",", batch.ToArray()); string name = "epss-" + Hash(joined) + ".json"; string note;
                 if (progress != null) progress("EPSS · " + (i + batch.Count) + " of " + u.Count + " CVEs");
                 string body = cache.Fetch(name, Base + "?cve=" + joined, null, TimeSpan.FromHours(24), 30000, out note);
-                foreach (object e in Json.Arr(Json.Get(Json.Parse(body), "data"))) { string c = Json.GetS(e, "cve"); double? s = Json.N(Json.Get(e, "epss")); if (c != null && s.HasValue) d[c] = s.Value; }
+                foreach (object e in Json.Arr(Json.Get(Json.Parse(body), "data"))) { string c = Json.GetS(e, "cve"); double? s = Json.N(Json.Get(e, "epss")); string dt = Json.GetS(e, "date"); if (dt != null) { if (minD == null || string.CompareOrdinal(dt, minD) < 0) minD = dt; if (maxD == null || string.CompareOrdinal(dt, maxD) > 0) maxD = dt; } if (c != null && s.HasValue) d[c] = s.Value; }
             }
-            return d;
+            asOf = minD == null ? "" : minD == maxD ? minD : minD + ".." + maxD; return d;
         }
         static string Hash(string s) { using (MD5 md5 = MD5.Create()) { byte[] h = md5.ComputeHash(Encoding.UTF8.GetBytes(s)); StringBuilder sb = new StringBuilder(); for (int i = 0; i < 8; i++) sb.Append(h[i].ToString("x2")); return sb.ToString(); } }
     }
@@ -800,80 +810,22 @@ namespace PSTools
                     catch (Exception ex) { Fail("Windows Update search", ex); StepTo("Windows Update", "failed", ex.Message.Length > 40 ? ex.Message.Substring(0, 40) + "…" : ex.Message); }
                     Done(); if (Cancel) return;
                 }
-                // 2 · feeds + resolve
-                Dictionary<string, Finding> merged = new Dictionary<string, Finding>();
-                if (DoWua) foreach (Finding f in Resolve.FromWindowsUpdate(Missing, Os)) merged[f.Key] = f;
-                if (DoMsrc && !Cancel)
-                {
-                    StepTo("Microsoft CVEs", "running", null);
-                    try
-                    {
-                        DateTime? newest = NewestUpdateDate(HotfixSnapshot()); int window = MsrcWindow(newest, Os.Installed, DateTime.Now, Months);
-                        Say("newest installed update " + (newest.HasValue ? newest.Value.ToString("yyyy-MM-dd") : ("not dated" + (Os.Installed.HasValue ? ", OS installed " + Os.Installed.Value.ToString("yyyy-MM-dd") : ""))) + " → checking " + window + " MSRC release" + (window == 1 ? "" : "s") + " (at least " + Months + ", at most " + MaxMonths + ")");
-                        string note; List<string> rel = Msrc.Releases(Cache, out note); Say("MSRC releases list " + note); List<MsrcRec> all = new List<MsrcRec>();
-                        for (int i = 0; i < Math.Min(window, rel.Count) && !Cancel; i++)
-                        {
-                            Fraction = (float)i / Math.Max(1, Math.Min(window, rel.Count)); Say("MSRC " + rel[i] + " · fetching (about 10 MB the first time)…"); string body; try { body = Msrc.Fetch(rel[i], Cache, out note); } catch (Exception ex) { Fail("MSRC " + rel[i], ex); continue; }
-                            Say("MSRC " + rel[i] + " · " + note + " · parsing…"); List<MsrcRec> recs = Msrc.Parse(body, rel[i]); all.AddRange(recs); lock (sync) Releases.Add(rel[i]); Say("MSRC " + rel[i] + " · " + recs.Count.ToString("N0") + " remediation records");
-                        }
-                        Say("resolving Microsoft CVEs against build " + Os.FullBuild + " and " + KnownKbs.Count + " known KBs…");
-                        int vul = 0, pat = 0;
-                        foreach (Finding f in Resolve.Msrc(all, Os, KnownKbs, Software, Reboot))
-                        {
-                            Finding wu; if (merged.TryGetValue(f.Key, out wu) && wu.Source == "Windows Update") { f.Fix += " · offered by Windows Update as " + wu.Fix; f.Evidence += " | " + wu.Evidence; if (f.Status == "vulnerable") f.Status = "update available"; }
-                            else { foreach (Finding w in merged.Values) if (w.Cve == f.Cve && w.Source == "Windows Update") { f.Fix += " · offered by Windows Update as " + w.Fix; if (f.Status == "vulnerable") f.Status = "update available"; } }
-                            merged[f.Key] = f; if (f.Open) vul++; else pat++;
-                        }
-                        // a WU-only finding whose CVE MSRC also resolved is now represented by the MSRC row
-                        List<string> drop = new List<string>(); foreach (KeyValuePair<string, Finding> p in merged) if (p.Value.Source == "Windows Update") foreach (Finding f in merged.Values) if (f.Source == "MSRC" && f.Cve == p.Value.Cve) { drop.Add(p.Key); break; }
-                        foreach (string k in drop) merged.Remove(k);
-                        Say("Microsoft: " + vul + " open, " + pat + " patched"); StepTo("Microsoft CVEs", "done", vul + " open · " + pat + " patched");
-                    }
-                    catch (Exception ex) { Fail("MSRC", ex); StepTo("Microsoft CVEs", "failed", null); }
-                    Fraction = -1; Publish(merged); if (Cancel) return;
-                }
-                if (DoNvd && !Cancel)
-                {
-                    StepTo("Third-party (NVD)", "running", null); int looked = 0, mapped = 0, hits = 0; foreach (Software s in SoftwareSnapshot()) if (s.Mapped && Ver.Parse(s.Version) != null) mapped++;
-                    foreach (Software s in SoftwareSnapshot())
-                    {
-                        if (Cancel) break; if (!s.Mapped) continue; if (Ver.Parse(s.Version) == null) { s.Status = "version '" + s.Version + "' is not comparable"; continue; } if (looked >= NvdLimit) { s.Status = "skipped (limit)"; continue; }
-                        Fraction = (float)looked / Math.Max(1, Math.Min(mapped, NvdLimit)); looked++; LookupOne(s, merged); if (s.Cves > 0) hits++; Publish(merged);
-                    }
-                    Fraction = -1; Say("NVD: " + looked + " product(s) looked up"); StepTo("Third-party (NVD)", Cancel ? "failed" : "done", looked + " looked up · " + hits + " with CVEs");
-                }
-                // 3 · enrichment
-                if (DoKev && !Cancel)
-                {
-                    StepTo("KEV", "running", null);
-                    try { string note; KevCatalog = Kev.Load(Cache, out note); Say("CISA KEV · " + KevCatalog.Count.ToString("N0") + " entries · " + note); int n = 0; foreach (Finding f in merged.Values) { KevEntry k; if (KevCatalog.TryGetValue(f.Cve, out k)) { f.Kev = true; f.Ransomware = k.Ransomware; f.KevDue = k.DueDate; n++; } } Say("KEV: " + n + " finding(s) are known exploited"); StepTo("KEV", "done", n + " exploited"); }
-                    catch (Exception ex) { Fail("KEV", ex); StepTo("KEV", "failed", null); }
-                    Publish(merged);
-                }
-                if (DoEpss && !Cancel)
-                {
-                    StepTo("EPSS", "running", null);
-                    try { List<string> ids = new List<string>(); foreach (Finding f in merged.Values) if (f.Open || f.Status == "unconfirmed") ids.Add(f.Cve); if (ids.Count > 0) { Dictionary<string, double> sc = Epss.Scores(ids, Cache, Say); foreach (Finding f in merged.Values) { double v; if (sc.TryGetValue(f.Cve, out v)) f.Epss = v; } Say("EPSS: " + sc.Count + " of " + ids.Count + " open CVEs scored"); StepTo("EPSS", "done", sc.Count + " scored"); } else StepTo("EPSS", "done", "nothing open"); }
-                    catch (Exception ex) { Fail("EPSS", ex); StepTo("EPSS", "failed", null); }
-                }
-                Publish(merged);
+                // 2 · feeds + resolve, 3 · enrichment: VulnEnrich (Enrich.cs), the same code `enrich` runs on a connected box from a collected bundle
+                VulnEnrich en = NewEnricher(); en.Run(); KevCatalog = en.KevCatalog; lock (sync) { Releases.Clear(); Releases.AddRange(en.Releases); }
                 int openN = 0; foreach (Finding f in Findings) if (f.Open) openN++;
                 Say((Cancel ? "cancelled · " : "done · ") + openN + " open finding(s), " + Findings.Count + " total, in " + Fmt.Secs((DateTime.Now - StartedAt).TotalSeconds));
             }
             catch (Exception ex) { Fail("scan", ex); }
             finally { Running = false; FinishedAt = DateTime.Now; if (Finished != null) Finished(); }
         }
-        /// <summary>One product against the NVD: fetch (cached), match the installed version, replace that product's findings.</summary>
-        void LookupOne(Software s, Dictionary<string, Finding> merged)
+        /// <summary>The enricher wired to this scan: the inventory it just collected in; findings, progress and steps out. The same class runs `enrich` on a connected box from a bundle.</summary>
+        VulnEnrich NewEnricher()
         {
-            List<string> stale = new List<string>(); foreach (KeyValuePair<string, Finding> p in merged) if (p.Value.Source == "NVD" && p.Value.Product == s.Name) stale.Add(p.Key); foreach (string k in stale) merged.Remove(k);
-            try
-            {
-                string note; List<CveRecord> recs = Nvd.ForProduct(s.Vendor, s.Product, s.Version, NvdApiKey, Cache, Say, out note); List<Finding> fs = Resolve.ThirdParty(s, recs); int open = 0;
-                foreach (Finding f in fs) { KevEntry k; if (KevCatalog.TryGetValue(f.Cve, out k)) { f.Kev = true; f.Ransomware = k.Ransomware; f.KevDue = k.DueDate; } merged[f.Key] = f; if (f.Open) open++; }
-                s.Cves = open; s.Status = open == 0 ? "no known CVEs at " + s.Version + " (" + note + ")" : open + " CVE(s) at " + s.Version + " (" + note + ")";
-            }
-            catch (Exception ex) { s.Status = "lookup failed: " + ex.Message; Fail("NVD " + s.Cpe, ex); }
+            VulnEnrich e = new VulnEnrich(); e.Os = Os; e.Reboot = Reboot; e.Software = SoftwareSnapshot(); e.KnownKbs = KnownKbs; e.Missing = MissingSnapshot(); e.NewestUpdate = NewestUpdateDate(HotfixSnapshot());
+            e.DoWua = DoWua; e.DoMsrc = DoMsrc; e.DoNvd = DoNvd; e.DoKev = DoKev; e.DoEpss = DoEpss; e.Months = Months; e.NvdLimit = NvdLimit; e.NvdApiKey = NvdApiKey; e.Cache = Cache; e.KevCatalog = KevCatalog;
+            e.Progress = Say; e.Step = StepTo; e.Failed = Fail; e.Cancelled = delegate { return Cancel; }; e.FractionChanged = delegate (float f) { Fraction = f; };
+            e.Published = delegate (List<Finding> l) { lock (sync) { Findings.Clear(); Findings.AddRange(l); } Done(); };
+            return e;
         }
         /// <summary>Look up just these programs (the Software view's action) and merge the results into the existing findings.</summary>
         public void LookupInBackground(List<Software> items)
@@ -881,24 +833,11 @@ namespace PSTools
             Thread t = new Thread(delegate ()
             {
                 Running = true;
-                try
-                {
-                    Dictionary<string, Finding> merged = new Dictionary<string, Finding>(); foreach (Finding f in FindingsSnapshot()) merged[f.Key] = f;
-                    if (KevCatalog.Count == 0 && DoKev && Cache != null) { try { string note; KevCatalog = Kev.Load(Cache, out note); } catch (Exception ex) { Fail("KEV", ex); } }
-                    int n = 0; foreach (Software s in items) { if (Cancel) break; if (Ver.Parse(s.Version) == null) { s.Status = "version '" + s.Version + "' is not comparable"; continue; } LookupOne(s, merged); n++; Publish(merged); }
-                    if (DoEpss && Cache != null) { try { List<string> ids = new List<string>(); foreach (Finding f in merged.Values) if (f.Source == "NVD" && (f.Open || f.Status == "unconfirmed") && !f.Epss.HasValue) ids.Add(f.Cve); if (ids.Count > 0) { Dictionary<string, double> sc = Epss.Scores(ids, Cache, Say); foreach (Finding f in merged.Values) { double v; if (sc.TryGetValue(f.Cve, out v)) f.Epss = v; } } } catch (Exception ex) { Fail("EPSS", ex); } }
-                    Publish(merged); Say("looked up " + n + " program(s)");
-                }
+                try { VulnEnrich e = NewEnricher(); e.Seed(FindingsSnapshot()); e.LookupSoftware(items); KevCatalog = e.KevCatalog; }
                 catch (Exception ex) { Fail("lookup", ex); }
                 finally { Running = false; if (Finished != null) Finished(); }
             });
             t.IsBackground = true; t.Name = "vuln-lookup"; t.Start();
-        }
-        void Publish(Dictionary<string, Finding> merged)
-        {
-            List<Finding> l = new List<Finding>(merged.Values); l.Sort(delegate (Finding a, Finding b) { int c = b.SortScore.CompareTo(a.SortScore); return c != 0 ? c : string.CompareOrdinal(b.Cve, a.Cve); });
-            lock (sync) { Findings.Clear(); Findings.AddRange(l); }
-            Done();
         }
         public List<Finding> FindingsSnapshot() { lock (sync) return new List<Finding>(Findings); }
         public List<Software> SoftwareSnapshot() { lock (sync) return new List<Software>(Software); }

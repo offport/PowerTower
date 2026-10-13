@@ -306,6 +306,10 @@ namespace PSTools
         /// <summary>Module allow-list; an empty list allows every read-only module.</summary>
         public bool ModuleAllowed(string module) { if (Modules.Count == 0) return true; foreach (string m in Modules) if (string.Equals(m, module, StringComparison.OrdinalIgnoreCase)) return true; return false; }
         public DateTime? PurgeAfter(DateTime collectedUtc) { return collectedUtc.AddDays(RetentionDays); }
+        /// <summary>The DPAPI-protected private key that goes with an engagement file: same folder, same name, ".key".</summary>
+        public static string KeyFileFor(string engagementPath) { return System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(engagementPath)), System.IO.Path.GetFileNameWithoutExtension(engagementPath) + ".key"); }
+        /// <summary>The private key XML out of its DPAPI wrapper (this Windows user, this machine, this engagement id).</summary>
+        public static string PrivateKey(Engagement e, string keyFile) { return Encoding.UTF8.GetString(BundleCrypto.Unprotect(System.IO.File.ReadAllBytes(keyFile), e.Id)); }
 
         static bool Cidr(string spec, out IPAddress net, out int bits)
         {

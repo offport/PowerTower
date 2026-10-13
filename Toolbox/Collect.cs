@@ -43,11 +43,13 @@ namespace PSTools
         public static RebootInfo RebootFrom(object t) { RebootInfo r = new RebootInfo(); if (t == null) return r; r.Cbs = B(t, "cbs"); r.WindowsUpdate = B(t, "windowsUpdate"); r.PendingFileRename = B(t, "pendingFileRename"); return r; }
         public static Dictionary<string, object> Software(Software s)
         {
-            Dictionary<string, object> d = D(); d["name"] = s.Name; d["version"] = s.Version; d["publisher"] = s.Publisher; d["installDate"] = s.InstallDate; d["scope"] = s.Scope; d["vendor"] = s.Vendor; d["product"] = s.Product; d["ecosystem"] = "windows"; return d;
+            Dictionary<string, object> d = D(); d["name"] = s.Name; d["version"] = s.Version; d["publisher"] = s.Publisher; d["installDate"] = s.InstallDate; d["scope"] = s.Scope; d["vendor"] = s.Vendor; d["product"] = s.Product; d["ecosystem"] = "windows";
+            if (s.Cves >= 0) { d["cves"] = s.Cves; d["status"] = s.Status; }   // the per-product verdict, once enriched
+            return d;
         }
         public static Software SoftwareFrom(object t)
         {
-            Software s = new Software(); s.Name = S(t, "name"); s.Version = S(t, "version"); s.Publisher = S(t, "publisher"); s.InstallDate = S(t, "installDate"); s.Scope = S(t, "scope"); s.Vendor = Json.GetS(t, "vendor"); s.Product = Json.GetS(t, "product"); return s;
+            Software s = new Software(); s.Name = S(t, "name"); s.Version = S(t, "version"); s.Publisher = S(t, "publisher"); s.InstallDate = S(t, "installDate"); s.Scope = S(t, "scope"); s.Vendor = Json.GetS(t, "vendor"); s.Product = Json.GetS(t, "product"); s.Cves = JsonWrite.Int(Json.Get(t, "cves"), -1); s.Status = S(t, "status"); return s;
         }
         public static Dictionary<string, object> Hotfix(Hotfix h) { Dictionary<string, object> d = D(); d["kb"] = h.Kb; d["description"] = h.Description; d["source"] = h.Source; d["title"] = h.Title; d["result"] = h.Result; d["installedOn"] = h.InstalledOn.HasValue ? (object)h.InstalledOn.Value : null; return d; }
         public static Hotfix HotfixFrom(object t) { Hotfix h = new Hotfix(); h.Kb = S(t, "kb"); h.Description = S(t, "description"); h.Source = S(t, "source"); h.Title = S(t, "title"); h.Result = S(t, "result"); h.InstalledOn = T(t, "installedOn"); return h; }

@@ -20,7 +20,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, Feeds_, EngagementTool_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -646,6 +646,145 @@ namespace PSTools
             Check(fc != null && fc.GetMethod("IsEncrypted") != null && fc.GetMethod("Encrypt") == null && fc.GetMethod("Decrypt") == null && fc.GetMethod("SecureWipe") == null && fc.GetMethod("Verify") == null, "PT-22: FileCrypto in the collector only recognises its files");
             Check(ar != null && ar.GetMethod("Collect") != null && ar.GetMethod("SetEnabled") == null && ar.GetMethod("Delete") == null, "PT-22: Autoruns in the collector collects but cannot toggle or delete");
             Check(fwl != null && fwl.GetMethod("GetBlocked") != null && fwl.GetMethod("SetBlocked") == null, "PT-22: the blocker's Firewall class in the collector reads the rule but cannot set it");
+        }
+        // ── enrich: the online half, run offline against a seeded feed cache ──
+        const string NvdFix = "{\"vulnerabilities\":[{\"cve\":{\"id\":\"CVE-2022-29072\",\"published\":\"2022-04-15T21:15:00.000\",\"descriptions\":[{\"lang\":\"en\",\"value\":\"7-Zip through 21.07 on Windows allows privilege escalation.\"}],\"metrics\":{\"cvssMetricV31\":[{\"type\":\"Primary\",\"cvssData\":{\"baseScore\":7.8,\"baseSeverity\":\"HIGH\"}}]},\"configurations\":[{\"nodes\":[{\"cpeMatch\":[{\"vulnerable\":true,\"criteria\":\"cpe:2.3:a:7-zip:7-zip:*:*:*:*:*:*:*:*\",\"versionEndIncluding\":\"21.07\"}]}]}]}},"
+            + "{\"cve\":{\"id\":\"CVE-2000-0001\",\"descriptions\":[{\"lang\":\"en\",\"value\":\"exact\"}],\"metrics\":{},\"configurations\":[{\"nodes\":[{\"cpeMatch\":[{\"vulnerable\":true,\"criteria\":\"cpe:2.3:a:7-zip:7-zip:21.07:*:*:*:*:*:*:*\"}]}]}]}},"
+            + "{\"cve\":{\"id\":\"CVE-2000-0002\",\"descriptions\":[],\"configurations\":[{\"nodes\":[{\"cpeMatch\":[{\"vulnerable\":true,\"criteria\":\"cpe:2.3:a:7-zip:7-zip:*:*:*:*:*:*:*:*\"}]}]}]}}]}";
+        /// <summary>One MSRC CVRF document per release, one CVE for build family 22621: the fixed UBR falls with age; the three oldest are at 2500, what the stale fixture host installed.</summary>
+        static string MsrcDoc(string release, int i)
+        {
+            int ubr = i <= 14 ? 2600 + (14 - i) * 10 : 2500; string cve = "CVE-2026-" + (1000 + i); string kb = (5070000 + i).ToString();
+            return "{\"ProductTree\":{\"FullProductName\":[{\"ProductID\":\"11\",\"Value\":\"Windows 11 Version 22H2 for x64-based Systems\"}]},\"Vulnerability\":[{\"CVE\":\"" + cve + "\",\"Title\":{\"Value\":\"fix " + release + "\"},\"Threats\":[{\"Type\":3,\"Description\":{\"Value\":\"Important\"}}],\"CVSSScoreSets\":[{\"BaseScore\":7.8}],\"Remediations\":[{\"Type\":2,\"Description\":{\"Value\":\"" + kb + "\"},\"ProductID\":[\"11\"],\"FixedBuild\":\"10.0.22621." + ubr + "\"}]}]}";
+        }
+        static FeedCache SeedFeeds(string dir, DateTime now)
+        {
+            FeedCache c = new FeedCache(dir); c.Offline = true; StringBuilder rel = new StringBuilder("{\"value\":[");
+            for (int i = 0; i < 18; i++) { DateTime m = now.AddMonths(-i); string id = m.ToString("yyyy-MMM", System.Globalization.CultureInfo.InvariantCulture); if (i > 0) rel.Append(','); rel.Append("{\"ID\":\"" + id + "\",\"InitialReleaseDate\":\"" + new DateTime(m.Year, m.Month, 9).ToString("yyyy-MM-dd") + "T17:00:00Z\"}"); c.Write("msrc-" + id + ".json", MsrcDoc(id, i)); }
+            rel.Append("]}"); c.Write("msrc-releases.json", rel.ToString());
+            c.Write("kev.json", "{\"catalogVersion\":\"2026.10.13\",\"dateReleased\":\"2026-10-13T12:00:00.0000Z\",\"vulnerabilities\":[{\"cveID\":\"CVE-2026-1003\",\"vendorProject\":\"Microsoft\",\"product\":\"Windows\",\"vulnerabilityName\":\"test\",\"dateAdded\":\"2026-09-01\",\"dueDate\":\"2026-09-22\",\"knownRansomwareCampaignUse\":\"Known\"}]}");
+            c.Write(Nvd.CacheName("7-zip", "7-zip", Ver.Canon("21.07")), NvdFix);
+            return c;
+        }
+        static Bundle FixtureBundle(int ubr, DateTime newestUpdate)
+        {
+            Bundle b = new Bundle(); b.Manifest["host"] = "FIXTURE"; b.Manifest["runId"] = "fx1"; b.Manifest["platform"] = "windows";
+            OsInfo os = new OsInfo(); os.ProductName = "Windows 11 Pro"; os.Major = 10; os.Build = 22621; os.Ubr = ubr; os.Arch = "x64"; os.Host = "FIXTURE";
+            Software z = new Software(); z.Name = "7-Zip 21.07 (x64)"; z.Version = "21.07"; z.Publisher = "Igor Pavlov"; z.Vendor = "7-zip"; z.Product = "7-zip";
+            Dictionary<string, object> inv = new Dictionary<string, object>(); inv["os"] = Codec.Os(os); inv["reboot"] = Codec.Reboot(new RebootInfo()); inv["software"] = new List<object>(new object[] { Codec.Software(z) }); inv["hotfixes"] = new List<object>(); inv["knownKbs"] = new List<string>(); inv["newestUpdate"] = newestUpdate; inv["missing"] = new List<object>(); inv["missingStatus"] = "not searched (offline collection)";
+            b["inventory"] = inv; b.Module("inventory", "ok", 1, 1, null); return b;
+        }
+        static void Enrich_()
+        {
+            DateTime now = new DateTime(2026, 10, 13); string dir = Path.Combine(Path.GetTempPath(), "pstools-feeds-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                FeedCache cache = SeedFeeds(dir, now); string note;
+                bool threw = false; try { cache.Fetch("nothing-here.json", "http://invalid.example/", null, TimeSpan.Zero, 1000, out note); } catch (InvalidOperationException) { threw = true; } Check(threw, "enrich: an offline feed cache never goes to the network - a missing feed fails, it is not fetched");
+                // a stale host: build 22621.2500, newest update Jul 2025. A dry run (no EPSS) learns which CVEs will be scored, so the EPSS batch can be seeded for exactly that request.
+                Bundle stale = FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc));
+                VulnEnrich dry = EnrichBundle.From(stale, cache); dry.Now = now; dry.DoEpss = false; dry.Run();
+                List<string> ids = new List<string>(); foreach (Finding f in dry.Findings) if (f.Open || f.Status == "unconfirmed") ids.Add(f.Cve);
+                cache.Write(Epss.CacheName(ids), "{\"data\":[{\"cve\":\"CVE-2026-1003\",\"epss\":\"0.42\",\"date\":\"2026-10-12\"},{\"cve\":\"CVE-2022-29072\",\"epss\":\"0.01\",\"date\":\"2026-10-12\"}]}");
+                VulnEnrich e = EnrichBundle.From(stale, cache); e.Now = now; e.Run();
+                int msrcOpen = 0, msrcPatched = 0, nvdOpen = 0, unconfirmed = 0; Finding kev = null; foreach (Finding f in e.Findings) { if (f.Source == "MSRC") { if (f.Open) msrcOpen++; else msrcPatched++; } if (f.Source == "NVD") { if (f.Open) nvdOpen++; else if (f.Status == "unconfirmed") unconfirmed++; } if (f.Cve == "CVE-2026-1003") kev = f; }
+                Check(e.Errors.Count == 0, "enrich: a complete feed pack enriches offline with no errors (" + string.Join(" | ", e.Errors.ToArray()) + ")");
+                Check(e.MsrcWindowUsed == 16 && e.Releases.Count == 16 && msrcOpen == 15 && msrcPatched == 1, "enrich: the stale build gets a 16-release MSRC window from the bundle's newest-update date and is NOT clean: " + msrcOpen + " open, " + msrcPatched + " patched (window " + e.MsrcWindowUsed + ", " + e.Releases.Count + " releases read)");
+                Check(nvdOpen == 2 && unconfirmed == 1 && e.Software[0].Cves == 2 && e.Software[0].Status.StartsWith("2 CVE(s)"), "enrich: third-party findings from the seeded NVD record (2 open, 1 unconfirmed) and the product verdict (" + e.Software[0].Status + ")");
+                Check(kev != null && kev.Kev && kev.Ransomware && kev.KevDue == "2026-09-22" && kev.Epss == 0.42, "enrich: KEV flag, ransomware and due date, and the EPSS score reach the finding");
+                object msrc = Json.Get(e.AsOf, "msrc"), kv = Json.Get(e.AsOf, "kev"), ep = Json.Get(e.AsOf, "epss"), nvd = Json.Get(e.AsOf, "nvd");
+                bool stamps = Json.Arr(Json.Get(msrc, "releases")).Count == 16; foreach (object u in Json.Arr(Json.Get(msrc, "releases"))) if (Json.GetS(u, "cached") == null || JsonWrite.Int(Json.Get(u, "records"), 0) != 1) stamps = false;
+                Check(stamps && JsonWrite.Int(Json.Get(msrc, "window"), 0) == 16 && Json.GetS(kv, "catalogVersion") == "2026.10.13" && Json.GetS(kv, "dateReleased") != null && Json.GetS(kv, "cached") != null && Json.GetS(ep, "dates") == "2026-10-12" && JsonWrite.Int(Json.Get(ep, "scored"), 0) == 2 && JsonWrite.Int(Json.Get(nvd, "products"), 0) == 1 && Json.GetS(nvd, "newestCache") != null && e.AsOf.ContainsKey("enrichedUtc") && JsonWrite.Bool(e.AsOf["offline"]), "enrich: as-of stamps - every MSRC release with its cache time, KEV catalog version and date, EPSS scoring date, NVD cache time, enriched-at, offline flag");
+                // determinism: a second enrichment of the same bundle against the same pack gives byte-identical findings
+                VulnEnrich e2 = EnrichBundle.From(stale, cache); e2.Now = now; e2.Run();
+                string f1 = JsonWrite.Text(Codec.Many(e.Findings, delegate (Finding f) { return (object)Codec.Finding(f); }), false), f2 = JsonWrite.Text(Codec.Many(e2.Findings, delegate (Finding f) { return (object)Codec.Finding(f); }), false);
+                Dictionary<string, object> a1 = new Dictionary<string, object>(e.AsOf), a2 = new Dictionary<string, object>(e2.AsOf); a1.Remove("enrichedUtc"); a2.Remove("enrichedUtc");
+                Check(f1 == f2 && f1.Length > 1000 && JsonWrite.Text(a1, false) == JsonWrite.Text(a2, false), "enrich: deterministic - identical findings (" + f1.Length + " chars) and identical as-of stamps across two runs");
+                // a current host keeps the small window and is clean against the same pack
+                Bundle fresh = FixtureBundle(2800, new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc)); VulnEnrich e3 = EnrichBundle.From(fresh, cache); e3.Now = now; e3.DoEpss = false; e3.Run();
+                int freshOpen = 0; foreach (Finding f in e3.Findings) if (f.Source == "MSRC" && f.Open) freshOpen++;
+                Check(e3.MsrcWindowUsed == 3 && e3.Releases.Count == 3 && freshOpen == 0, "enrich: a current build keeps the 3-release window and has no open Microsoft CVEs (window " + e3.MsrcWindowUsed + ")");
+                // the bundle gets its findings section and the per-product verdicts back, and still round-trips
+                EnrichBundle.Apply(stale, e); object fd = stale["findings"];
+                Check(Json.Arr(Json.Get(fd, "items")).Count == e.Findings.Count && JsonWrite.Int(Json.Get(fd, "open"), 0) == 17 && Json.Get(fd, "asOf") != null && stale.Manifest.ContainsKey("enriched") && JsonWrite.Int(Json.Get(Json.Arr(Json.Get(stale["inventory"], "software"))[0], "cves"), -1) == 2, "enrich: Apply writes findings (17 open), as-of, the enriched manifest block and the product verdict into the bundle");
+                string p = Path.Combine(dir, "stale.enriched.ptb"); stale.Save(p, BundleKey.FromPassphrase("correct horse")); Bundle r = Bundle.Load(p, BundleKey.FromPassphrase("correct horse"));
+                Check(Json.Arr(Json.Get(r["findings"], "items")).Count == e.Findings.Count && Codec.FindingFrom(Json.Arr(Json.Get(r["findings"], "items"))[0]).Cve.StartsWith("CVE-"), "enrich: the enriched bundle seals and reloads with every finding");
+                // the real tool, end to end, offline: PowerTowerCli enrich <in> --plain --offline --cache <pack>
+                string cli = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe"); string inP = Path.Combine(dir, "in.ptb"), outP = Path.Combine(dir, "out.ptb"); FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc)).Save(inP, BundleKey.None());
+                if (!File.Exists(cli)) Check(false, "enrich: PowerTowerCli.exe not found next to Tests.exe");
+                else
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo(cli, "enrich \"" + inP + "\" --plain --offline --cache \"" + dir + "\" --out \"" + outP + "\" --no-color --quiet --top 3"); psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.CreateNoWindow = true;
+                    using (Process pr = Process.Start(psi)) { string so = pr.StandardOutput.ReadToEnd(); string se = pr.StandardError.ReadToEnd(); pr.WaitForExit(180000); Bundle ob = File.Exists(outP) ? Bundle.Load(outP, BundleKey.None()) : null; Check(pr.ExitCode == 0 && ob != null && Json.Arr(Json.Get(ob["findings"], "items")).Count > 10 && ob.Manifest.ContainsKey("enriched"), "enrich: the CLI tool enriches a plain bundle offline (exit " + pr.ExitCode + (se.Trim().Length > 0 ? " · stderr: " + se.Trim().Replace("\r", "").Replace("\n", " | ").Substring(0, Math.Min(200, se.Trim().Length)) : "") + ")"); }
+                }
+                string err = ""; try { EnrichBundle.From(new Bundle(), cache); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("inventory"), "enrich: a bundle without an inventory section is refused with a reason");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        static void FeedPack_()
+        {
+            string src = Path.Combine(Path.GetTempPath(), "pstools-fp-src-" + Guid.NewGuid().ToString("N")), pack = Path.Combine(Path.GetTempPath(), "pstools-fp-pack-" + Guid.NewGuid().ToString("N")), dst = Path.Combine(Path.GetTempPath(), "pstools-fp-dst-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                FeedCache c = SeedFeeds(src, new DateTime(2026, 10, 13)); DateTime old = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc); File.SetLastWriteTimeUtc(Path.Combine(src, "kev.json"), old);
+                FeedPack.Result ex = FeedPack.Export(c, pack); int n = Directory.GetFiles(src, "*.json").Length;
+                Check(ex.Files == n && n >= 21 && File.Exists(ex.Manifest) && Json.Arr(Json.Get(Json.Parse(File.ReadAllText(ex.Manifest)), "files")).Count == n, "feeds: export copies every cached feed (" + n + ") and writes a manifest with one entry each");
+                FeedCache d = new FeedCache(dst); FeedPack.Result im = FeedPack.Import(pack, d, true);
+                bool same = im.Files == n && im.Skipped == 0; foreach (string f in Directory.GetFiles(src, "*.json")) { string name = Path.GetFileName(f), o = Path.Combine(dst, name); if (!File.Exists(o) || BundleCrypto.FileSha256(f) != BundleCrypto.FileSha256(o) || Math.Abs((File.GetLastWriteTimeUtc(f) - File.GetLastWriteTimeUtc(o)).TotalSeconds) > 2) same = false; }
+                Check(same && File.GetLastWriteTimeUtc(Path.Combine(dst, "kev.json")) == old, "feeds: import round-trips every file byte for byte with its original time, so age and stale-fallback stay honest");
+                d.Offline = true; string note; Check(Msrc.Releases(d, out note).Count == 18 && note.StartsWith("offline pack"), "feeds: the imported pack serves enrichment offline (" + note + ")");
+                Check(FeedPack.Status(d).Count == 3 && FeedPack.Status(d)[1].Contains("MSRC 19") && FeedPack.Status(d)[1].Contains("KEV 1"), "feeds: status counts the feeds by kind (" + FeedPack.Status(d)[1] + ")");
+                File.AppendAllText(Path.Combine(pack, "kev.json"), " "); FeedPack.Result im2 = FeedPack.Import(pack, new FeedCache(dst + "2"), true);
+                Check(im2.Skipped == 1 && im2.Problems.Count == 1 && im2.Problems[0].Contains("kev.json") && !File.Exists(Path.Combine(dst + "2", "kev.json")) && im2.Files == n - 1, "feeds: a tampered file in the pack is refused by its SHA-256 and not imported (" + im2.Problems[0] + ")");
+                string mf = Path.Combine(pack, FeedPack.ManifestName); File.WriteAllText(mf, File.ReadAllText(mf).Replace("\"kev.json\"", "\"..\\\\evil.json\"")); FeedPack.Result im3 = FeedPack.Import(pack, new FeedCache(dst + "3"), false);
+                Check(im3.Skipped >= 1 && im3.Problems.Count >= 1 && im3.Problems[0].Contains("plain .json name") && !File.Exists(Path.Combine(Path.GetDirectoryName(dst + "3"), "evil.json")), "feeds: a manifest entry with a path in it is refused - no traversal out of the cache (" + im3.Problems[0] + ")");
+                string err = ""; try { FeedPack.Import(src, new FeedCache(dst + "4"), true); } catch (BundleException e) { err = e.Message; } Check(err.Contains("not a feed pack"), "feeds: a folder without a manifest is not a pack");
+                string cli = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe");
+                if (File.Exists(cli))
+                {
+                    int x1; string o1 = RunCli(cli, "feeds --export \"" + pack + "-cli\" --cache \"" + src + "\" --no-color", out x1); int x2; string o2 = RunCli(cli, "feeds --import \"" + pack + "-cli\" --cache \"" + dst + "-cli\" --no-color", out x2); int x3; string o3 = RunCli(cli, "feeds --cache \"" + dst + "-cli\" --no-color", out x3);
+                    Check(x1 == 0 && x2 == 0 && x3 == 0 && Directory.GetFiles(dst + "-cli", "*.json").Length == n && o3.Contains("MSRC 19"), "feeds CLI: export → import → status round-trip (exit " + x1 + "/" + x2 + "/" + x3 + ")");
+                }
+                else Check(false, "feeds CLI: PowerTowerCli.exe not found next to Tests.exe");
+            }
+            finally { foreach (string p in new string[] { src, pack, pack + "-cli", dst, dst + "2", dst + "3", dst + "4", dst + "-cli" }) try { if (Directory.Exists(p)) Directory.Delete(p, true); } catch { } }
+        }
+        static string RunCli(string exe, string args, out int exit)
+        {
+            ProcessStartInfo psi = new ProcessStartInfo(exe, args); psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.CreateNoWindow = true;
+            using (Process p = Process.Start(psi)) { string so = p.StandardOutput.ReadToEnd(); string se = p.StandardError.ReadToEnd(); p.WaitForExit(120000); exit = p.ExitCode; return so + "\n" + se; }
+        }
+        static void EngagementTool_()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-engt-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Engagement e = EngagementTool.New(dir, "ENG-2026-014", "Acme", "ops", new string[] { "10.0.0.0/24", "WS-FIN-01" }, new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc), new string[] { "inventory", "network" }, 60, "pilot", 2048);
+                string jf = Path.Combine(dir, "engagement.json"), kf = Path.Combine(dir, "engagement.key");
+                Check(File.Exists(jf) && File.Exists(kf) && e.File == jf && Engagement.KeyFileFor(jf) == kf, "engagement new: writes engagement.json and engagement.key beside it");
+                byte[] kb = File.ReadAllBytes(kf); string jt = File.ReadAllText(jf);
+                Check(IndexOf(kb, Encoding.UTF8.GetBytes("<RSAKeyValue>")) < 0 && IndexOf(kb, Encoding.UTF8.GetBytes("<D>")) < 0 && !jt.Contains("<D>") && !jt.Contains("<P>") && jt.Contains("<Modulus>"), "engagement new: the key file is DPAPI-opaque and engagement.json carries only the public key");
+                Engagement r = Engagement.Load(jf); string priv = Engagement.PrivateKey(r, kf);
+                Check(r.Validate().Count == 0 && r.Scope.Count == 2 && r.Modules.Count == 2 && r.RetentionDays == 60 && r.WindowEndUtc.HasValue && BundleCrypto.KeyId(BundleCrypto.PublicOf(priv)) == BundleCrypto.KeyId(r.PublicKeyXml), "engagement new: reloads valid, and the DPAPI key opens to the private half of the published public key");
+                byte[] sealedB = BundleCrypto.Seal(Encoding.UTF8.GetBytes("{\"x\":1}"), BundleKey.ToPublic(r.PublicKeyXml)); Check(Encoding.UTF8.GetString(BundleCrypto.Open(sealedB, BundleKey.WithPrivate(priv))) == "{\"x\":1}", "engagement: a bundle sealed to the engagement's public key opens with the recovered private key");
+                string insp = string.Join("\n", EngagementTool.Inspect(r).ToArray());
+                Check(!insp.Contains("<RSAKeyValue") && !insp.Contains("<D>") && !insp.Contains("<Modulus>") && insp.Contains(BundleCrypto.KeyId(r.PublicKeyXml)) && insp.Contains("opens for this Windows user, matches") && insp.Contains("10.0.0.0/24") && insp.Contains("valid        yes"), "engagement inspect: scope, window, key id and key-file state - never any key material");
+                string why; Check(r.InScope("10.0.0.77", out why) && !r.InScope("203.0.113.9", out why) && why.Contains("not in the engagement scope"), "engagement check: an in-scope host is accepted, an out-of-scope host refused by Engagement.InScope (" + why + ")");
+                string err = ""; try { EngagementTool.New(dir, "ENG-2026-014", "Acme", "ops", new string[] { "*" }, null, null, null, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("already exists"), "engagement new: never overwrites an existing engagement's key");
+                err = ""; try { EngagementTool.New(dir + "-b", "ENG-2", "Acme", "ops", new string[] { "10.0.0.0/24" }, null, null, new string[] { "bogus" }, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("bogus") && !Directory.Exists(dir + "-b"), "engagement new: a bad module name is refused before anything is written (" + err + ")");
+                err = ""; try { EngagementTool.New(dir + "-c", "", "Acme", "ops", new string[] { "300.1.1.1/40" }, new DateTime(2026, 2, 1), new DateTime(2026, 1, 1), null, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("id is empty") && err.Contains("CIDR") && err.Contains("window") && !Directory.Exists(dir + "-c"), "engagement new: validation names every problem and writes nothing (" + err + ")");
+                string cli = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe"); string cdir = dir + "-cli";
+                if (File.Exists(cli))
+                {
+                    int x1; string o1 = RunCli(cli, "engagement new --out \"" + cdir + "\" --id ENG-CLI-1 --client Acme --scope 10.0.0.0/24,ws-fin-01 --modules inventory --retention 30 --bits 2048 --no-color", out x1);
+                    int x2; string o2 = RunCli(cli, "engagement inspect \"" + Path.Combine(cdir, "engagement.json") + "\" --no-color", out x2);
+                    int x3; string o3 = RunCli(cli, "engagement check \"" + Path.Combine(cdir, "engagement.json") + "\" --host 203.0.113.9 --no-color", out x3);
+                    int x4; string o4 = RunCli(cli, "engagement check \"" + Path.Combine(cdir, "engagement.json") + "\" --host 10.0.0.5 --no-color", out x4);
+                    Check(x1 == 0 && File.Exists(Path.Combine(cdir, "engagement.key")) && !o1.Contains("<RSAKeyValue") && x2 == 0 && !o2.Contains("<RSAKeyValue") && !o2.Contains("<D>") && !o2.Contains("<Modulus>") && o2.Contains("ENG-CLI-1") && x3 == 1 && o3.Contains("OUT OF SCOPE") && x4 == 0, "engagement CLI: new (exit " + x1 + "), inspect without key material (exit " + x2 + "), check refuses 203.0.113.9 (exit " + x3 + ") and accepts 10.0.0.5 (exit " + x4 + ")");
+                }
+                else Check(false, "engagement CLI: PowerTowerCli.exe not found next to Tests.exe");
+            }
+            finally { foreach (string p in new string[] { dir, dir + "-b", dir + "-c", dir + "-cli" }) try { if (Directory.Exists(p)) Directory.Delete(p, true); } catch { } }
         }
         static void Secrets_()
         {
