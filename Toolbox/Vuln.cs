@@ -770,10 +770,13 @@ namespace PSTools
             return true;
         }
         /// <summary>How many monthly MSRC releases to check: the months since the newest installed update, plus one so the release that update came from is included - never fewer than the configured minimum, never more than MaxMonths. Without a dated update the OS install date stands in; without that, the cap: a host that cannot show its patch level gets the widest check, not the narrowest. A fixed 3 months made a host that was a year behind look clean, because its missing fixes were all in older releases.</summary>
+        /// <summary>A patch-level date more than a day ahead of now cannot be true; callers flag it and MsrcWindow ignores it.</summary>
+        public static bool FutureDate(DateTime? d, DateTime now) { return d.HasValue && d.Value > now.AddDays(1); }
         public static int MsrcWindow(DateTime? newestUpdate, DateTime? osInstalled, DateTime now, int minimum)
         {
             DateTime? since = newestUpdate.HasValue ? newestUpdate : osInstalled;
-            int months = MaxMonths; if (since.HasValue) months = (now.Year - since.Value.Year) * 12 + (now.Month - since.Value.Month) + 1;
+            // a date after today is not a patch level (a doctored bundle, a wrong clock): it gets the widest window, never the narrowest (PT-38)
+            int months = MaxMonths; if (since.HasValue && !FutureDate(since, now)) months = (now.Year - since.Value.Year) * 12 + (now.Month - since.Value.Month) + 1;
             return Math.Max(Math.Max(1, minimum), Math.Min(MaxMonths, months));
         }
         void StepTo(string label, string state, string note) { if (Step != null) Step(label, state, note); }

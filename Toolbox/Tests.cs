@@ -20,7 +20,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, Feeds_, EngagementTool_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -582,7 +582,7 @@ namespace PSTools
             try { b.Save(tmp, BundleKey.None()); Bundle r = Bundle.Load(tmp, BundleKey.None()); Check(Json.Arr(Json.Get(r["inventory"], "software")).Count == Json.Arr(Json.Get(inv, "software")).Count && r.Modules.Count == b.Modules.Count && Codec.OsFrom(Json.Get(r["inventory"], "os")).FullBuild == Inventory.Os().FullBuild, "collect: the saved bundle reloads with the same counts and the same OS build"); }
             finally { try { File.Delete(tmp); } catch { } }
             // the engagement gate: wrong scope refuses to run; the module allow-list skips, not fails
-            Engagement eg = new Engagement(); eg.Id = "E"; eg.Scope.Add("192.0.2.1"); Collector c2 = new Collector(); c2.Modules.Clear(); c2.Modules.Add("inventory"); c2.Engagement = eg; string err = ""; try { c2.Run(); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("scope"), "collect: a host outside the engagement scope is refused before anything is read (" + err + ")");
+            Engagement eg = new Engagement(); eg.Id = "E"; eg.Scope.Add("192.0.2.1"); eg.WindowStartUtc = DateTime.UtcNow.AddDays(-1); eg.WindowEndUtc = DateTime.UtcNow.AddDays(1); Collector c2 = new Collector(); c2.Modules.Clear(); c2.Modules.Add("inventory"); c2.Engagement = eg; string err = ""; try { c2.Run(); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("scope"), "collect: a host outside the engagement scope is refused before anything is read (" + err + ")");
             eg.Scope.Clear(); eg.Scope.Add("*"); eg.Modules.Add("network"); Collector c3 = new Collector(); c3.Modules.Clear(); c3.Modules.AddRange(new string[] { "inventory", "network" }); c3.Engagement = eg; c3.WuHistory = false; Bundle b3 = c3.Run();
             Check(b3.ModuleStatus("inventory") == "skipped" && b3.ModuleStatus("network") == "ok" && Json.GetS(b3.Manifest, "engagementId") == "E", "collect: modules outside the engagement allow-list are skipped and recorded");
             // the IOC sweep finds this very process by hash
@@ -770,13 +770,14 @@ namespace PSTools
                 string insp = string.Join("\n", EngagementTool.Inspect(r).ToArray());
                 Check(!insp.Contains("<RSAKeyValue") && !insp.Contains("<D>") && !insp.Contains("<Modulus>") && insp.Contains(BundleCrypto.KeyId(r.PublicKeyXml)) && insp.Contains("opens for this Windows user, matches") && insp.Contains("10.0.0.0/24") && insp.Contains("valid        yes"), "engagement inspect: scope, window, key id and key-file state - never any key material");
                 string why; Check(r.InScope("10.0.0.77", out why) && !r.InScope("203.0.113.9", out why) && why.Contains("not in the engagement scope"), "engagement check: an in-scope host is accepted, an out-of-scope host refused by Engagement.InScope (" + why + ")");
-                string err = ""; try { EngagementTool.New(dir, "ENG-2026-014", "Acme", "ops", new string[] { "*" }, null, null, null, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("already exists"), "engagement new: never overwrites an existing engagement's key");
+                string err = ""; try { EngagementTool.New(dir, "ENG-2026-014", "Acme", "ops", new string[] { "*" }, new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc), null, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("already exists"), "engagement new: never overwrites an existing engagement's key");
+                err = ""; try { EngagementTool.New(dir + "-w", "ENG-W", "Acme", "ops", new string[] { "*" }, null, null, null, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("time window") && !Directory.Exists(dir + "-w"), "engagement new: a window is required (PT-32) - " + err);
                 err = ""; try { EngagementTool.New(dir + "-b", "ENG-2", "Acme", "ops", new string[] { "10.0.0.0/24" }, null, null, new string[] { "bogus" }, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("bogus") && !Directory.Exists(dir + "-b"), "engagement new: a bad module name is refused before anything is written (" + err + ")");
                 err = ""; try { EngagementTool.New(dir + "-c", "", "Acme", "ops", new string[] { "300.1.1.1/40" }, new DateTime(2026, 2, 1), new DateTime(2026, 1, 1), null, 30, "", 2048); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("id is empty") && err.Contains("CIDR") && err.Contains("window") && !Directory.Exists(dir + "-c"), "engagement new: validation names every problem and writes nothing (" + err + ")");
                 string cli = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe"); string cdir = dir + "-cli";
                 if (File.Exists(cli))
                 {
-                    int x1; string o1 = RunCli(cli, "engagement new --out \"" + cdir + "\" --id ENG-CLI-1 --client Acme --scope 10.0.0.0/24,ws-fin-01 --modules inventory --retention 30 --bits 2048 --no-color", out x1);
+                    int x1; string o1 = RunCli(cli, "engagement new --out \"" + cdir + "\" --id ENG-CLI-1 --client Acme --scope 10.0.0.0/24,ws-fin-01 --from 2026-10-01 --to 2027-12-31 --modules inventory --retention 30 --bits 2048 --no-color", out x1);
                     int x2; string o2 = RunCli(cli, "engagement inspect \"" + Path.Combine(cdir, "engagement.json") + "\" --no-color", out x2);
                     int x3; string o3 = RunCli(cli, "engagement check \"" + Path.Combine(cdir, "engagement.json") + "\" --host 203.0.113.9 --no-color", out x3);
                     int x4; string o4 = RunCli(cli, "engagement check \"" + Path.Combine(cdir, "engagement.json") + "\" --host 10.0.0.5 --no-color", out x4);
@@ -784,7 +785,107 @@ namespace PSTools
                 }
                 else Check(false, "engagement CLI: PowerTowerCli.exe not found next to Tests.exe");
             }
-            finally { foreach (string p in new string[] { dir, dir + "-b", dir + "-c", dir + "-cli" }) try { if (Directory.Exists(p)) Directory.Delete(p, true); } catch { } }
+            finally { foreach (string p in new string[] { dir, dir + "-b", dir + "-c", dir + "-w", dir + "-cli" }) try { if (Directory.Exists(p)) Directory.Delete(p, true); } catch { } }
+        }
+        // ── PT-32: engagement limits fail CLOSED - anything missing, wrong-typed, unparseable or inverted refuses to load, so nothing runs ──
+        static Dictionary<string, object> EngTree()
+        {
+            Dictionary<string, object> t = new Dictionary<string, object>(); t["schema"] = Engagement.Schema; t["id"] = "ENG-OK"; t["client"] = "Acme"; t["operator"] = "ops"; t["scope"] = new List<object>(new object[] { "10.0.0.0/24", "WS-FIN-01" });
+            t["windowStartUtc"] = "2026-10-01T00:00:00Z"; t["windowEndUtc"] = "2026-12-31T00:00:00Z"; t["modules"] = new List<object>(new object[] { "inventory" }); t["retentionDays"] = 60; t["publicKeyXml"] = ""; t["notes"] = ""; return t;
+        }
+        static string Refused(string dir, string name, string json)
+        {
+            string f = Path.Combine(dir, name.Replace(' ', '-') + ".json"); File.WriteAllText(f, json, new UTF8Encoding(false));
+            try { Engagement.Load(f); return null; } catch (BundleException ex) { return ex.Message; }
+        }
+        static void EngagementStrict_()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-engs-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                string okf = Path.Combine(dir, "ok.json"); File.WriteAllText(okf, JsonWrite.Text(EngTree(), true)); Engagement e = Engagement.Load(okf); string why;
+                Check(e.Id == "ENG-OK" && e.Validate().Count == 0 && e.InScope("10.0.0.9", out why) && !e.InScope("10.9.9.9", out why) && e.InWindow(new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc), out why) && !e.InWindow(new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), out why) && e.ModuleAllowed("inventory") && !e.ModuleAllowed("secrets"), "PT-32: a valid engagement still loads and InScope / InWindow / ModuleAllowed still enforce");
+                int n = 0;
+                Action<string, Action<Dictionary<string, object>>, string> refuse = delegate (string name, Action<Dictionary<string, object>> mutate, string word)
+                {
+                    Dictionary<string, object> t = EngTree(); mutate(t); string msg = Refused(dir, name, JsonWrite.Text(t, false)); n++;
+                    Check(msg != null && msg.IndexOf(word, StringComparison.OrdinalIgnoreCase) >= 0, "PT-32: " + name + " is refused (" + (msg ?? "LOADED - fail open!") + ")");
+                };
+                refuse("missing id", delegate (Dictionary<string, object> t) { t.Remove("id"); }, "id");
+                refuse("missing scope", delegate (Dictionary<string, object> t) { t.Remove("scope"); }, "scope");
+                refuse("missing window start", delegate (Dictionary<string, object> t) { t.Remove("windowStartUtc"); }, "windowStartUtc");
+                refuse("missing window end", delegate (Dictionary<string, object> t) { t.Remove("windowEndUtc"); }, "windowEndUtc");
+                refuse("no window at all", delegate (Dictionary<string, object> t) { t.Remove("windowStartUtc"); t.Remove("windowEndUtc"); }, "window");
+                refuse("scope as a string", delegate (Dictionary<string, object> t) { t["scope"] = "10.0.0.0/24"; }, "list");
+                refuse("scope with a number in it", delegate (Dictionary<string, object> t) { t["scope"] = new List<object>(new object[] { "10.0.0.0/24", 5 }); }, "strings");
+                refuse("bad CIDR", delegate (Dictionary<string, object> t) { t["scope"] = new List<object>(new object[] { "300.1.1.1/40" }); }, "CIDR");
+                refuse("empty scope entry", delegate (Dictionary<string, object> t) { t["scope"] = new List<object>(new object[] { "10.0.0.0/24", "" }); }, "empty");
+                refuse("whitespace scope entry", delegate (Dictionary<string, object> t) { t["scope"] = new List<object>(new object[] { "   " }); }, "empty");
+                refuse("inverted window", delegate (Dictionary<string, object> t) { t["windowStartUtc"] = "2026-12-31T00:00:00Z"; t["windowEndUtc"] = "2026-10-01T00:00:00Z"; }, "before");
+                refuse("unparseable date", delegate (Dictionary<string, object> t) { t["windowEndUtc"] = "garbage"; }, "date");
+                refuse("impossible date", delegate (Dictionary<string, object> t) { t["windowEndUtc"] = "2026-13-45"; }, "date");
+                refuse("numeric date", delegate (Dictionary<string, object> t) { t["windowStartUtc"] = 1700000000; }, "date");
+                refuse("modules as a string", delegate (Dictionary<string, object> t) { t["modules"] = "inventory"; }, "list");
+                refuse("modules as a number", delegate (Dictionary<string, object> t) { t["modules"] = 7; }, "list");
+                refuse("module list with a number in it", delegate (Dictionary<string, object> t) { t["modules"] = new List<object>(new object[] { "inventory", 1 }); }, "strings");
+                refuse("unknown module", delegate (Dictionary<string, object> t) { t["modules"] = new List<object>(new object[] { "wipe-everything" }); }, "unknown");
+                refuse("retention as text", delegate (Dictionary<string, object> t) { t["retentionDays"] = "90"; }, "retentionDays");
+                refuse("retention zero", delegate (Dictionary<string, object> t) { t["retentionDays"] = 0; }, "retentionDays");
+                refuse("retention fractional", delegate (Dictionary<string, object> t) { t["retentionDays"] = 2.5; }, "retentionDays");
+                refuse("id as a number", delegate (Dictionary<string, object> t) { t["id"] = 42; }, "string");
+                refuse("public key garbage", delegate (Dictionary<string, object> t) { t["publicKeyXml"] = "not a key"; }, "public key");
+                refuse("wrong schema", delegate (Dictionary<string, object> t) { t["schema"] = "engagement/9"; }, "schema");
+                string full = JsonWrite.Text(EngTree(), false);
+                Check(Refused(dir, "truncated", full.Substring(0, full.Length / 2)) != null && Refused(dir, "empty", "") != null && Refused(dir, "array root", "[]") != null && Refused(dir, "deep", new string('[', 5000) + new string(']', 5000)) != null, "PT-32: truncated file, empty file, array root and 5,000-deep nesting are refused");
+                Dictionary<string, object> hostile = EngTree(); hostile["modules"] = "inventory"; string hf = Path.Combine(dir, "hostile.json"); File.WriteAllText(hf, JsonWrite.Text(hostile, false));
+                Dictionary<string, string> opt = new Dictionary<string, string>(); opt["engagement"] = hf; Collector c = new Collector(); c.Modules.Clear(); c.Modules.Add("network");
+                string err = CollectOptions.Apply(c, delegate (string k) { string v; return opt.TryGetValue(k, out v) ? v : null; }, delegate (string k) { return opt.ContainsKey(k); }, delegate (string k) { return new List<string>(); });
+                Check(err != null && err.IndexOf("modules", StringComparison.OrdinalIgnoreCase) >= 0 && c.Engagement == null, "PT-32: the collector refuses a hostile engagement at option time - no collection starts (" + err + ")");
+                Engagement mem = new Engagement(); mem.Id = "M"; mem.Scope.Add("*"); Collector c2 = new Collector(); c2.Modules.Clear(); c2.Modules.Add("network"); c2.Engagement = mem; err = ""; try { c2.Run(); } catch (BundleException ex) { err = ex.Message; }
+                Check(err.Contains("window"), "PT-32: an engagement built in memory without a window is refused by the collector itself, before any module runs (" + err + ")");
+                Check(n == 24, "PT-32: " + n + " hostile variants exercised, each refused with a reason");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        // ── FUZZ round 3, fail-closed theme: PT-38 future patch date, PT-34 --months, PT-37 manifest shape, PT-35/36 modifiedUtc ──
+        static void FailClosed_()
+        {
+            DateTime now = new DateTime(2026, 10, 13); string dir = Path.Combine(Path.GetTempPath(), "pstools-fc-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                Check(VulnScan.MsrcWindow(new DateTime(2100, 1, 1), null, now, 3) == 36 && VulnScan.MsrcWindow(new DateTime(9999, 12, 31), null, now, 3) == 36 && VulnScan.MsrcWindow(new DateTime(2100, 1, 1), new DateTime(2026, 9, 1), now, 3) == 36 && VulnScan.MsrcWindow(null, new DateTime(2100, 1, 1), now, 3) == 36, "PT-38: a future newest-update or install date gets the widest window (36), never the minimum - no fallback to a lesser date either");
+                Check(VulnScan.MsrcWindow(now.AddHours(12), null, now, 3) == 3 && VulnScan.MsrcWindow(new DateTime(2026, 9, 21), null, now, 3) == 3, "PT-38: a date within a day of now (clock skew) is still a normal patch level");
+                FeedCache cache = SeedFeeds(dir, now); Bundle doctored = FixtureBundle(2500, new DateTime(2100, 1, 1, 0, 0, 0, DateTimeKind.Utc)); VulnEnrich e = EnrichBundle.From(doctored, cache); e.Now = now; e.DoEpss = false; e.Run();
+                bool flag = false; foreach (string er in e.Errors) if (er.Contains("future")) flag = true;
+                Check(e.MsrcWindowUsed == 36 && e.Releases.Count == 18 && JsonWrite.Bool(Json.Get(e.AsOf, "msrc", "newestUpdateInFuture")) && flag, "PT-38: a doctored bundle claiming a 2100 patch date is enriched against every available release (" + e.Releases.Count + "), flagged in asOf and in the problems (" + (e.Errors.Count > 0 ? e.Errors[0] : "") + ")");
+                string cli = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe"); string inP = Path.Combine(dir, "in.ptb"); FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc)).Save(inP, BundleKey.None());
+                if (File.Exists(cli))
+                {
+                    List<string> wrong = new List<string>(); foreach (string m in new string[] { "0", "-1", "abc", "3.5", "99", "+3" }) { int x; string o = RunCli(cli, "enrich \"" + inP + "\" --plain --offline --cache \"" + dir + "\" --months " + m + " --no-color --quiet", out x); if (x != 2 || !o.Contains("--months")) wrong.Add(m + "→exit " + x); }
+                    int xv; string ov = RunCli(cli, "vulnerabilities --months abc --no-color --quiet", out xv); int xo; string oo = RunCli(cli, "enrich \"" + inP + "\" --plain --offline --cache \"" + dir + "\" --months 36 --no-epss --out \"" + Path.Combine(dir, "m36.ptb") + "\" --no-color --quiet", out xo);
+                    Check(wrong.Count == 0 && xv == 2 && ov.Contains("--months") && xo == 0, "PT-34: --months 0 / -1 / abc / 3.5 / 99 / +3 are usage errors (exit 2) for enrich and vulnerabilities alike; --months 36 is accepted by enrich" + (wrong.Count > 0 ? " (wrong: " + string.Join(", ", wrong.ToArray()) + ")" : "") + " (vuln abc → " + xv + ", enrich 36 → " + xo + ")");
+                }
+                else Check(false, "PT-34: PowerTowerCli.exe not found next to Tests.exe");
+                string pack = Path.Combine(dir, "pack"); FeedPack.Export(cache, pack); string mf = Path.Combine(pack, FeedPack.ManifestName); string manifest = File.ReadAllText(mf);
+                Func<string, string> import = delegate (string json) { File.WriteAllText(mf, json, new UTF8Encoding(false)); try { FeedPack.Result r = FeedPack.Import(pack, new FeedCache(Path.Combine(dir, "imp-" + Guid.NewGuid().ToString("N"))), true); return "imported " + r.Files + (r.Problems.Count > 0 ? " | " + string.Join(" | ", r.Problems.ToArray()) : ""); } catch (BundleException ex) { return "refused: " + ex.Message; } };
+                string noFiles = import("{\"schema\":\"feedpack/1\",\"exportedUtc\":\"2026-10-13T00:00:00Z\"}"), strFiles = import("{\"schema\":\"feedpack/1\",\"files\":\"kev.json\"}"), emptyFiles = import("{\"schema\":\"feedpack/1\",\"files\":[]}"), ghost = import("{\"schema\":\"feedpack/1\",\"files\":[{\"name\":\"ghost.json\",\"sha256\":\"00\"}]}");
+                Check(noFiles.StartsWith("refused") && noFiles.Contains("files") && strFiles.StartsWith("refused") && emptyFiles.StartsWith("refused") && emptyFiles.Contains("no files") && ghost.StartsWith("imported 0") && ghost.Contains("no files were imported"), "PT-37: a manifest with files missing, not a list or empty is refused as an invalid pack; a pack whose every entry is refused says so (" + noFiles + " / " + strFiles + " / " + emptyFiles + " / " + ghost + ")");
+                File.WriteAllText(mf, manifest, new UTF8Encoding(false));
+                int nFiles = Directory.GetFiles(pack, "*.json").Length - 1; string kevStamp = JsonWrite.Stamp(File.GetLastWriteTimeUtc(Path.Combine(pack, "kev.json")));
+                Func<string, string> withKevTime = delegate (string t) { string j = manifest.Replace("\"name\": \"kev.json\"", "\"name\": \"kev.json\", \"_\": 1"); int at = j.IndexOf("\"name\": \"kev.json\""); int ms = j.IndexOf("\"modifiedUtc\": \"", at); int me = j.IndexOf("\"", ms + 16); return j.Substring(0, ms + 16) + t + j.Substring(me); };
+                string[] bad = { "1500-01-01T00:00:00Z", "0001-01-01T00:00:00Z", "2099-01-01T00:00:00Z", "9999-12-31T23:59:59Z", "not-a-date" }; List<string> wrongT = new List<string>();
+                foreach (string t in bad)
+                {
+                    string impDir = Path.Combine(dir, "t-" + Guid.NewGuid().ToString("N")); File.WriteAllText(mf, withKevTime(t), new UTF8Encoding(false)); FeedPack.Result r;
+                    try { r = FeedPack.Import(pack, new FeedCache(impDir), true); } catch (Exception ex) { wrongT.Add(t + "→threw " + ex.GetType().Name); continue; }
+                    bool kevAbsent = !File.Exists(Path.Combine(impDir, "kev.json")); bool said = false; foreach (string p in r.Problems) if (p.StartsWith("kev.json") && p.Contains("modifiedUtc")) said = true;
+                    if (!(kevAbsent && said && r.Skipped == 1 && r.Files == nFiles - 1)) wrongT.Add(t + "→files " + r.Files + " skipped " + r.Skipped + " kevAbsent " + kevAbsent + " said " + said);
+                }
+                File.WriteAllText(mf, manifest, new UTF8Encoding(false));
+                Check(wrongT.Count == 0, "PT-35/36: modifiedUtc before 1601, in the future or unparseable is refused BEFORE the file is copied - kev.json absent, named in the problems, the other " + (nFiles - 1) + " imported (manifest stamp " + kevStamp + ")" + (wrongT.Count > 0 ? " wrong: " + string.Join("; ", wrongT.ToArray()) : ""));
+                // [fail-closed: next]
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
         }
         static void Secrets_()
         {

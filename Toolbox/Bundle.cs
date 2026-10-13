@@ -262,23 +262,64 @@ namespace PSTools
         public void Save(string path) { System.IO.File.WriteAllText(path, JsonWrite.Text(ToTree(), true), new UTF8Encoding(false)); File = path; }
         public static Engagement Load(string path)
         {
+            // fail closed (PT-32): every limit is read strictly - a field that is missing, of the wrong type or unparseable
+            // throws here, and a loaded engagement is always a valid one. Dropping a bad window or module list silently
+            // would remove the very guardrail the file exists to impose.
             object t; try { t = Json.Parse(System.IO.File.ReadAllText(path, Encoding.UTF8)); } catch (Exception ex) { throw new BundleException("engagement file " + path + ": " + ex.Message); }
-            if (Json.Obj(t) == null) throw new BundleException("engagement file " + path + ": not a JSON object");
-            string schema = Json.GetS(t, "schema") ?? ""; if (schema != Schema) throw new BundleException("engagement file " + path + ": schema '" + schema + "' is not " + Schema);
-            Engagement e = new Engagement(); e.File = path; e.Id = Json.GetS(t, "id") ?? ""; e.Client = Json.GetS(t, "client") ?? ""; e.Operator = Json.GetS(t, "operator") ?? ""; e.Notes = Json.GetS(t, "notes") ?? ""; e.PublicKeyXml = Json.GetS(t, "publicKeyXml") ?? "";
-            e.Scope.AddRange(JsonWrite.Strings(Json.Get(t, "scope"))); e.Modules.AddRange(JsonWrite.Strings(Json.Get(t, "modules")));
-            e.WindowStartUtc = JsonWrite.Date(Json.Get(t, "windowStartUtc")); e.WindowEndUtc = JsonWrite.Date(Json.Get(t, "windowEndUtc")); e.RetentionDays = JsonWrite.Int(Json.Get(t, "retentionDays"), 90);
+            Dictionary<string, object> d = Json.Obj(t); if (d == null) throw new BundleException("engagement file " + path + ": not a JSON object");
+            string schema = Json.GetS(d, "schema") ?? ""; if (schema != Schema) throw new BundleException("engagement file " + path + ": schema '" + schema + "' is not " + Schema);
+            Engagement e = new Engagement(); e.File = path;
+            e.Id = Str(d, "id", path, true); e.Client = Str(d, "client", path, false); e.Operator = Str(d, "operator", path, false); e.Notes = Str(d, "notes", path, false); e.PublicKeyXml = Str(d, "publicKeyXml", path, false);
+            e.Scope.AddRange(StrList(d, "scope", path, true)); e.Modules.AddRange(StrList(d, "modules", path, false));
+            e.WindowStartUtc = DateReq(d, "windowStartUtc", path); e.WindowEndUtc = DateReq(d, "windowEndUtc", path); e.RetentionDays = IntReq(d, "retentionDays", path);
+            List<string> bad = e.Validate(); if (bad.Count > 0) throw new BundleException("engagement file " + path + ": " + string.Join("; ", bad.ToArray()));
             return e;
+        }
+        static string Where(string path, string k) { return "engagement file " + path + ": '" + k + "'"; }
+        static string Str(Dictionary<string, object> d, string k, string path, bool required)
+        {
+            object o; if (!d.TryGetValue(k, out o) || o == null) { if (required) throw new BundleException(Where(path, k) + " is missing"); return ""; }
+            string s = o as string; if (s == null) throw new BundleException(Where(path, k) + " must be a string"); return s;
+        }
+        static List<string> StrList(Dictionary<string, object> d, string k, string path, bool required)
+        {
+            object o; List<string> r = new List<string>(); if (!d.TryGetValue(k, out o) || o == null) { if (required) throw new BundleException(Where(path, k) + " is missing"); return r; }
+            List<object> l = o as List<object>; if (l == null) throw new BundleException(Where(path, k) + " must be a list of strings");
+            foreach (object x in l) { string s = x as string; if (s == null) throw new BundleException(Where(path, k) + " must contain only strings"); r.Add(s); }
+            return r;
+        }
+        static DateTime DateReq(Dictionary<string, object> d, string k, string path)
+        {
+            object o; if (!d.TryGetValue(k, out o) || o == null) throw new BundleException(Where(path, k) + " is missing - an engagement must have a time window");
+            string s = o as string; if (s == null) throw new BundleException(Where(path, k) + " must be an ISO-8601 UTC date string");
+            DateTime? v = JsonWrite.Date(o); if (!v.HasValue) throw new BundleException(Where(path, k) + " is not a date I can parse: '" + s + "'"); return v.Value;
+        }
+        static int IntReq(Dictionary<string, object> d, string k, string path)
+        {
+            object o; if (!d.TryGetValue(k, out o) || o == null) throw new BundleException(Where(path, k) + " is missing");
+            if (!(o is double)) throw new BundleException(Where(path, k) + " must be a number of days"); double v = (double)o;
+            if (v != Math.Floor(v) || v < 1 || v > 3650) throw new BundleException(Where(path, k) + " must be a whole number of days from 1 to 3650"); return (int)v;
         }
         /// <summary>Problems that make the file unusable; empty means usable.</summary>
         public List<string> Validate()
         {
             List<string> l = new List<string>();
             if (Id.Trim().Length == 0) l.Add("id is empty");
+            else foreach (char ch in Id) if (!char.IsLetterOrDigit(ch) && ch != '-' && ch != '_' && ch != '.') { l.Add("id may use letters, digits, - _ . only"); break; }
             if (Scope.Count == 0) l.Add("scope is empty - nothing may be audited");
-            foreach (string s in Scope) { IPAddress ip; int bits; if (s == "*") continue; if (s.IndexOf('/') >= 0 && !Cidr(s, out ip, out bits)) l.Add("scope entry '" + s + "' is not a valid CIDR"); }
-            if (WindowStartUtc.HasValue && WindowEndUtc.HasValue && WindowEndUtc.Value < WindowStartUtc.Value) l.Add("window ends before it starts");
-            if (RetentionDays < 1) l.Add("retentionDays must be at least 1");
+            foreach (string s in Scope)
+            {
+                if (s == null || s.Trim().Length == 0) { l.Add("scope has an empty entry"); continue; }
+                if (s != s.Trim()) { l.Add("scope entry '" + s + "' has leading or trailing whitespace"); continue; }
+                if (s == "*") continue; IPAddress ip; int bits;
+                if (s.IndexOf('/') >= 0) { if (!Cidr(s, out ip, out bits)) l.Add("scope entry '" + s + "' is not a valid CIDR"); }
+                else if (!HostOrIp(s)) l.Add("scope entry '" + s + "' is not a host name or IP");
+            }
+            foreach (string m in Modules) if (m == null || Array.IndexOf(Collector.AllModules, m.ToLowerInvariant()) < 0) l.Add("module '" + m + "' is unknown");
+            if (!WindowStartUtc.HasValue || !WindowEndUtc.HasValue) l.Add("the time window needs both windowStartUtc and windowEndUtc");
+            else if (WindowEndUtc.Value <= WindowStartUtc.Value) l.Add("window ends before it starts");
+            if (RetentionDays < 1 || RetentionDays > 3650) l.Add("retentionDays must be 1 to 3650");
+            if (PublicKeyXml.Length > 0 && (!PublicKeyXml.StartsWith("<RSAKeyValue>") || PublicKeyXml.IndexOf("<Modulus>") < 0 || PublicKeyXml.IndexOf("<D>") >= 0)) l.Add("publicKeyXml is not an RSA public key (or carries private parts)");
             return l;
         }
         /// <summary>Is this target (host name or IP) inside the scope? Exact host name (case-insensitive), exact IP, CIDR, or "*". An empty scope allows nothing.</summary>
@@ -299,6 +340,7 @@ namespace PSTools
         public bool InWindow(DateTime nowUtc, out string why)
         {
             why = "";
+            if (!WindowStartUtc.HasValue || !WindowEndUtc.HasValue) { why = "the engagement has no time window - nothing may run"; return false; }   // fail closed (PT-32)
             if (WindowStartUtc.HasValue && nowUtc < WindowStartUtc.Value) { why = "the engagement window opens " + JsonWrite.Stamp(WindowStartUtc.Value); return false; }
             if (WindowEndUtc.HasValue && nowUtc > WindowEndUtc.Value) { why = "the engagement window closed " + JsonWrite.Stamp(WindowEndUtc.Value); return false; }
             return true;
@@ -311,6 +353,7 @@ namespace PSTools
         /// <summary>The private key XML out of its DPAPI wrapper (this Windows user, this machine, this engagement id).</summary>
         public static string PrivateKey(Engagement e, string keyFile) { return Encoding.UTF8.GetString(BundleCrypto.Unprotect(System.IO.File.ReadAllBytes(keyFile), e.Id)); }
 
+        static bool HostOrIp(string s) { foreach (char ch in s) if (!(char.IsLetterOrDigit(ch) || ch == '.' || ch == '-' || ch == '_' || ch == ':')) return false; return true; }
         static bool Cidr(string spec, out IPAddress net, out int bits)
         {
             net = null; bits = -1; int i = spec.IndexOf('/'); if (i < 0) return false;

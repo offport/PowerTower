@@ -139,6 +139,7 @@ namespace PSTools
             List<string> run = new List<string>(Modules), skipped = new List<string>();
             if (Engagement != null)
             {
+                List<string> invalid = Engagement.Validate(); if (invalid.Count > 0) throw new BundleException("the engagement is not valid - nothing was collected: " + string.Join("; ", invalid.ToArray()));   // fail closed, even for an engagement built in memory (PT-32)
                 string why; List<string> names = LocalNames(); bool inScope = false; foreach (string n in names) if (Engagement.InScope(n, out why)) { inScope = true; break; }
                 if (!inScope) throw new BundleException("this host (" + string.Join(", ", names.ToArray()) + ") is not in the engagement scope - nothing was collected");
                 if (!Engagement.InWindow(DateTime.UtcNow, out why)) throw new BundleException(why + " - nothing was collected");

@@ -18,6 +18,7 @@ namespace PSTools
             if (modules != null) foreach (string m in modules) { string t = (m ?? "").Trim().ToLowerInvariant(); if (t.Length > 0 && !e.Modules.Contains(t)) e.Modules.Add(t); }
             foreach (string m in e.Modules) if (Array.IndexOf(Collector.AllModules, m) < 0) throw new BundleException("unknown module '" + m + "' (choose from " + string.Join(", ", Collector.AllModules) + ")");
             foreach (char ch in e.Id) if (!char.IsLetterOrDigit(ch) && ch != '-' && ch != '_' && ch != '.') throw new BundleException("id: letters, digits, - _ . only");
+            if (!fromUtc.HasValue || !toUtc.HasValue) throw new BundleException("the engagement needs a time window: --from and --to (UTC)");
             List<string> bad = e.Validate(); if (bad.Count > 0) throw new BundleException(string.Join("; ", bad.ToArray()));
             if (keyBits != 2048 && keyBits != 3072 && keyBits != 4096) throw new BundleException("key size must be 2048, 3072 or 4096");
             Directory.CreateDirectory(dir); string jf = Path.Combine(dir, "engagement.json"), kf = Engagement.KeyFileFor(jf);

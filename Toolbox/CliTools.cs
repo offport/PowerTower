@@ -404,6 +404,13 @@ namespace PSTools
             else { string ef = a.Get("engagement", ""); if (!File.Exists(ef)) throw new UsageException("--engagement: no such file: " + ef); eng = Engagement.Load(ef); string kf = Engagement.KeyFileFor(ef); if (!File.Exists(kf)) throw new UsageException("--engagement: no " + Path.GetFileName(kf) + " beside " + ef); priv = Engagement.PrivateKey(eng, kf); }
             open = BundleKey.WithPrivate(priv); seal = BundleKey.ToPublic(BundleCrypto.PublicOf(priv));
         }
+        /// <summary>--months, else the saved setting, else 3. An explicit value that is not a whole number in range is a usage error - never silently 3, which once turned "--months 99" into the narrowest scan (PT-34).</summary>
+        static int MonthsOption(Args a, Settings st, int max)
+        {
+            string v = a.Get("months", null); int n;
+            if (v != null) { if (!int.TryParse(v.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out n) || n < 1 || n > max) throw new UsageException("--months must be a whole number from 1 to " + max + " (got '" + v + "')"); return n; }
+            return int.TryParse(st.Get("vuln.months", "3"), out n) && n >= 1 && n <= max ? n : 3;
+        }
         static int Enrich_(Args a)
         {
             ToolInfo info = Tools.ByKey("enrich"); Out.Header(info);
@@ -415,7 +422,7 @@ namespace PSTools
             Settings st = Cli.S; string key = a.Get("nvd-key", st.Get("vuln.key", "")).Trim();
             VulnEnrich e; try { e = EnrichBundle.From(b, cache); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
             e.NvdApiKey = key; e.DoMsrc = !a.Has("no-msrc"); e.DoNvd = !a.Has("no-nvd"); e.DoKev = !a.Has("no-kev"); e.DoEpss = !a.Has("no-epss");
-            int months; if (!int.TryParse(a.Get("months", st.Get("vuln.months", "3")), out months) || months < 1 || months > 12) months = 3; e.Months = months;
+            e.Months = MonthsOption(a, st, VulnScan.MaxMonths);
             Out.Note("bundle " + b.Host + " · run " + b.RunId + " · build " + e.Os.FullBuild + " · " + e.Software.Count + " programs · newest update " + (e.NewestUpdate.HasValue ? e.NewestUpdate.Value.ToString("yyyy-MM-dd") : "not dated") + " · feeds: " + (cache.Offline ? "offline pack " : "") + cache.Dir);
             Throttle th = new Throttle(200); e.Progress = delegate (string m) { th.Say(m); }; e.Step += delegate (string label, string state, string note) { if (state == "running") Out.Note("· " + label); else if (state == "done" || state == "failed") Out.Note("  " + label + ": " + state + (note != null ? " · " + note : "")); }; e.Cancelled = delegate { return Cli.Cancelled; };
             e.Run(); EnrichBundle.Apply(b, e);
@@ -449,7 +456,7 @@ namespace PSTools
                 string dir = Cli.FullFolder(a.Get("import", "")); if (!Directory.Exists(dir)) throw new UsageException("--import: no such folder: " + dir); FeedPack.Result r;
                 try { r = FeedPack.Import(dir, cache, !a.Has("no-verify")); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
                 foreach (string p in r.Problems) Out.Warn(p);
-                Out.Ok("imported " + r.Files + " file(s), " + FeedPack.Size(r.Bytes) + " into " + cache.Dir + (r.Skipped > 0 ? " · " + r.Skipped + " refused" : "")); return r.Skipped > 0 ? Cli.PROBLEMS : Cli.OK;
+                Out.Ok("imported " + r.Files + " file(s), " + FeedPack.Size(r.Bytes) + " into " + cache.Dir + (r.Skipped > 0 ? " · " + r.Skipped + " refused" : "")); return r.Skipped > 0 || r.Files == 0 ? Cli.PROBLEMS : Cli.OK;
             }
             foreach (string line in FeedPack.Status(cache)) Out.Line("  " + line); return Cli.OK;
         }
@@ -458,7 +465,7 @@ namespace PSTools
         static int Engagement_(Args a)
         {
             ToolInfo info = Tools.ByKey("engagement"); Out.Header(info);
-            string verb = a.Positional.Count > 0 ? a.Positional[0].ToLowerInvariant() : ""; if (verb != "new" && verb != "inspect" && verb != "check") throw new UsageException("engagement new --out <folder> --id <id> --scope <list> … | engagement inspect <engagement.json> | engagement check <engagement.json> --host <name or ip>");
+            string verb = a.Positional.Count > 0 ? a.Positional[0].ToLowerInvariant() : ""; if (verb != "new" && verb != "inspect" && verb != "check") throw new UsageException("engagement new --out <folder> --id <id> --scope <list> --from <utc> --to <utc> … | engagement inspect <engagement.json> | engagement check <engagement.json> --host <name or ip>");
             if (verb == "new")
             {
                 string dir = Cli.FullFolder(a.Get("out", Directory.GetCurrentDirectory())); DateTime? from = UtcDate(a, "from"), to = UtcDate(a, "to");
@@ -751,7 +758,7 @@ namespace PSTools
             Settings st = Cli.S; string key = a.Get("nvd-key", st.Get("vuln.key", "")).Trim(); if (a.Has("nvd-key")) { st.Set("vuln.key", key); st.Save(); }
             VulnScan s = new VulnScan(); s.Cache = cache; s.NvdApiKey = key;
             s.DoWua = !a.Has("no-wua") && st.Get("vuln.wua", "1") == "1"; s.DoMsrc = !a.Has("no-msrc") && st.Get("vuln.msrc", "1") == "1"; s.DoNvd = !a.Has("no-nvd") && st.Get("vuln.nvd", "1") == "1"; s.DoKev = !a.Has("no-kev") && st.Get("vuln.kev", "1") == "1"; s.DoEpss = !a.Has("no-epss") && st.Get("vuln.epss", "1") == "1";
-            int months; if (!int.TryParse(a.Get("months", st.Get("vuln.months", "3")), out months) || months < 1 || months > 12) months = 3; s.Months = months;
+            s.Months = MonthsOption(a, st, 12);
             if (!s.DoWua && !s.DoMsrc && !s.DoNvd) { Out.Error("Keep at least one source: Windows Update, Microsoft CVEs or third-party."); return Cli.USAGE; }
             Out.Note("sources: " + (s.DoWua ? "Windows Update · " : "") + (s.DoMsrc ? "Microsoft CVEs (" + s.Months + "+ months, widened to the host's patch level) · " : "") + (s.DoNvd ? "third-party (NVD" + (key.Length > 0 ? ", keyed" : ", no key: one product every 6.5 s") + ") · " : "") + (s.DoKev ? "KEV · " : "") + (s.DoEpss ? "EPSS" : "") + " · feed cache " + cache.Dir);
             Throttle th = new Throttle(200); s.Progress += delegate (string m) { th.Say(m); }; s.Step += delegate (string label, string state, string note) { if (state == "running") Out.Note("· " + label); else if (state == "done" || state == "failed") Out.Note("  " + label + ": " + state + (note != null ? " · " + note : "")); };
