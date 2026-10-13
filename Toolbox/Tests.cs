@@ -20,7 +20,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -52,6 +52,10 @@ namespace PSTools
             Check(v6.Count == 3 && v6[0].Value == "fe80::1" && v6[1].Value == "::1" && v6[2].Value == "2606:4700:4700::1111", "extractor: IPv6 forms (" + v6.Count + ": " + string.Join(" ", v6.ConvertAll(delegate (Target x) { return x.Value; }).ToArray()) + "), times and MACs skipped");
             List<string> ex = Extractor.ExpandDomains(new string[] { "doubleclick.net", "ads.doubleclick.net", "www.foo.com" });
             Check(ex.Count == 4 && ex.Contains("www.doubleclick.net") && !ex.Contains("www.ads.doubleclick.net"), "expand: www. added for bare names only");
+            Stopwatch sw = Stopwatch.StartNew(); List<Target> pad = Extractor.Extract(new string[] { new string(' ', 100000) + "a.com" }); sw.Stop();   // PT-01: was quadratic, minutes
+            Check(pad.Count == 1 && pad[0].Value == "a.com" && sw.ElapsedMilliseconds < 1000, "extractor: 100,000 spaces + a.com returns a.com in " + sw.ElapsedMilliseconds + " ms");
+            List<Target> lz = Extractor.Extract(new string[] { "010.0.0.1 and 01.02.03.04 and 10.0.0.1" });   // PT-05: leading zeros are octal to some parsers
+            Check(lz.Count == 1 && lz[0].Value == "10.0.0.1" && Extractor.Classify("010.0.0.1") == Kind.Invalid, "extractor: IPv4 with leading-zero octets rejected (" + lz.Count + " found)");
         }
 
         static void Hosts_()
@@ -186,6 +190,7 @@ namespace PSTools
         static void Csv_()
         {
             Check(Fmt.CsvQ("plain") == "plain" && Fmt.CsvQ("a,b") == "\"a,b\"" && Fmt.CsvQ("say \"hi\"") == "\"say \"\"hi\"\"\"" && Fmt.CsvQ(null) == "", "csv: quoting");
+            Check(Fmt.CsvQ("=cmd") == "'=cmd" && Fmt.CsvQ("@SUM(1)") == "'@SUM(1)" && Fmt.CsvQ("+x") == "'+x" && Fmt.CsvQ("-x") == "'-x" && Fmt.CsvQ("=a,b") == "\"'=a,b\"" && Fmt.CsvQ("-5") == "-5" && Fmt.CsvQ("") == "" && Fmt.CsvQ("a=b") == "a=b", "csv: formula cells neutralised, numbers and plain text untouched (PT-03)");
         }
     
         // ── vulnerability management engine ──
@@ -245,6 +250,46 @@ namespace PSTools
             HashSet<string> office = new HashSet<string>(); office.Add("5002800"); f = Resolve.Msrc(r, os, office, sw, rb); Check(f[1].Status == "patched" && f[1].Evidence.Contains("is installed"), "resolve: Office KB present → patched");
             os.Build = 22631; os.Ubr = 4000; f = Resolve.Msrc(r, os, new HashSet<string>(), new List<Software>(), rb); Check(f.Count == 0, "resolve: other build family and no matching software → out of scope, not vulnerable");
         }
+        static void MsrcWindow_()
+        {
+            DateTime now = new DateTime(2026, 10, 13);
+            Check(VulnScan.MsrcWindow(new DateTime(2026, 9, 15), null, now, 3) == 3, "msrc window: a host patched last month keeps the minimum of 3 releases");
+            int wide = VulnScan.MsrcWindow(new DateTime(2025, 7, 10), null, now, 3);
+            Check(wide == 16, "msrc window: newest update 15 months ago → 16 releases, back to the month it came from (got " + wide + ")");
+            Check(VulnScan.MsrcWindow(new DateTime(2020, 1, 1), null, now, 3) == VulnScan.MaxMonths && VulnScan.MaxMonths == 36, "msrc window: a host years behind is capped at 36");
+            Check(VulnScan.MsrcWindow(null, new DateTime(2025, 12, 1), now, 3) == 11, "msrc window: no dated update → the OS install date stands in (Dec 2025 → 11)");
+            Check(VulnScan.MsrcWindow(null, null, now, 3) == 36, "msrc window: nothing dated → the cap, never the minimum");
+            Check(VulnScan.MsrcWindow(new DateTime(2026, 2, 1), null, now, 12) == 12, "msrc window: a larger configured minimum still wins (12 over 9)");
+            // what counts as the patch level: OS servicing rows, not the daily Defender definitions Windows Update keeps installing on a stale host
+            Hotfix qfe = new Hotfix(); qfe.Source = "QFE"; qfe.Kb = "5060000"; qfe.InstalledOn = new DateTime(2025, 7, 10);
+            Hotfix defs = new Hotfix(); defs.Source = "WU history"; defs.Kb = "2267602"; defs.Title = "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602 (Version 1.433.10.0)"; defs.Description = "installation"; defs.Result = "succeeded"; defs.InstalledOn = now.AddDays(-1);
+            Hotfix cbs = new Hotfix(); cbs.Source = "CBS"; cbs.Kb = "5060001";
+            DateTime? d = VulnScan.NewestUpdateDate(new Hotfix[] { defs, cbs, qfe });
+            Check(d.HasValue && d.Value == qfe.InstalledOn.Value, "msrc window: the QFE date is the patch level; yesterday's definitions do not make a stale host look current");
+            Hotfix cu = new Hotfix(); cu.Source = "WU history"; cu.Kb = "5062000"; cu.Title = "2025-09 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5062000)"; cu.Description = "installation"; cu.Result = "succeeded"; cu.InstalledOn = new DateTime(2025, 9, 12);
+            Hotfix failed = new Hotfix(); failed.Source = "WU history"; failed.Kb = "5066000"; failed.Title = "2026-10 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5066000)"; failed.Description = "installation"; failed.Result = "failed"; failed.InstalledOn = now;
+            d = VulnScan.NewestUpdateDate(new Hotfix[] { defs, cu, failed, cbs });
+            Check(d.HasValue && d.Value == cu.InstalledOn.Value, "msrc window: without QFE dates the newest successful WU cumulative update counts; failed installs and definitions do not");
+            Check(!VulnScan.NewestUpdateDate(new Hotfix[] { cbs, defs }).HasValue, "msrc window: no servicing date at all → null, so the cap applies");
+            // why it matters: a host on a build family the newest releases no longer service, last patched Jul 2025. Its missing fixes are all in older releases.
+            OsInfo os = new OsInfo(); os.ProductName = "Windows 11 Pro"; os.Major = 10; os.Build = 22621; os.Ubr = 2500;
+            List<string> rel = new List<string>(); Dictionary<string, List<MsrcRec>> byRel = new Dictionary<string, List<MsrcRec>>();
+            for (int i = 0; i < 16; i++)
+            {
+                DateTime m = now.AddMonths(-i); string r = m.ToString("yyyy-MM"); rel.Add(r); byRel[r] = new List<MsrcRec>();
+                MsrcRec rec = new MsrcRec(); rec.Cve = "CVE-2026-" + (1000 + i); rec.Title = "fix " + r; rec.Severity = "Important"; rec.Kb = (5070000 + i).ToString(); rec.Release = r; rec.ProductName = "Windows 11 Version 22H2 for x64-based Systems";
+                // the 3 newest releases only service the current build family; the older ones carry the host's family, fixed above its UBR until the Jul-2025 release it did install
+                rec.FixedBuild = i < 3 ? "10.0.26100." + (6000 + i) : "10.0.22621." + (i <= 14 ? 2600 + (14 - i) * 10 : 2500);
+                byRel[r].Add(rec);
+            }
+            List<MsrcRec> narrow = new List<MsrcRec>(); for (int i = 0; i < Math.Min(3, rel.Count); i++) narrow.AddRange(byRel[rel[i]]);
+            List<MsrcRec> all = new List<MsrcRec>(); for (int i = 0; i < Math.Min(wide, rel.Count); i++) all.AddRange(byRel[rel[i]]);
+            List<Finding> fn = Resolve.Msrc(narrow, os, new HashSet<string>(), new List<Software>(), new RebootInfo());
+            List<Finding> fw = Resolve.Msrc(all, os, new HashSet<string>(), new List<Software>(), new RebootInfo());
+            int openN = 0; foreach (Finding f in fn) if (f.Open) openN++; int openW = 0, patched = 0; foreach (Finding f in fw) { if (f.Open) openW++; else patched++; }
+            Check(openN == 0, "msrc window: with the old fixed 3 months the stale host has " + openN + " open findings - it looked clean");
+            Check(openW == 12 && patched == 1, "msrc window: with the derived " + wide + "-release window the same host has " + openW + " open findings and " + patched + " patched (expected 12 and 1)");
+        }
         static void Resolve_()
         {
             Supersedence g = new Supersedence(); g.Add("4580000", "4571703"); g.Add("4590000", "4580000"); g.Add("4600000", "4590000");
@@ -287,10 +332,16 @@ namespace PSTools
                 Check(recs.Count > 0 && has, "feeds: NVD 7-zip 21.07 → " + recs.Count + " CVEs incl. CVE-2022-29072 in " + sw.ElapsedMilliseconds + " ms (" + note + ")");
                 Software sw7 = new Software(); sw7.Name = "7-Zip 21.07"; sw7.Version = "21.07"; sw7.Vendor = "7-zip"; sw7.Product = "7-zip"; List<Finding> f = Resolve.ThirdParty(sw7, recs); int open = 0; foreach (Finding x in f) if (x.Open) open++;
                 Check(open > 0, "feeds: " + open + " confirmed finding(s) for 7-Zip 21.07 locally, " + (f.Count - open) + " unconfirmed");
-                sw.Restart(); string body = Msrc.Fetch(rel[0], cache, out note); sw.Stop(); Stopwatch p = Stopwatch.StartNew(); List<MsrcRec> mr = Msrc.Parse(body, rel[0]); p.Stop(); int withBuild = 0; foreach (MsrcRec r in mr) if (r.FixedBuild != null) withBuild++;
-                Check(mr.Count > 500 && withBuild > mr.Count / 2, "feeds: MSRC " + rel[0] + " " + (body.Length / 1024 / 1024) + " MB fetched in " + sw.ElapsedMilliseconds + " ms (" + note + "), parsed " + mr.Count + " records in " + p.ElapsedMilliseconds + " ms, " + withBuild + " with FixedBuild");
+                string cur = rel[0]; string body = ""; List<MsrcRec> mr = new List<MsrcRec>(); sw.Restart(); Stopwatch p = new Stopwatch();
+                for (int ri = 0; ri < rel.Count && ri < 3; ri++)   // the newest document can be a small "Early" release (e.g. 4 records): test against the newest full month
+                {
+                    cur = rel[ri]; body = Msrc.Fetch(cur, cache, out note); p.Restart(); mr = Msrc.Parse(body, cur); p.Stop();
+                    if (mr.Count > 500) break;
+                }
+                sw.Stop(); int withBuild = 0; foreach (MsrcRec r in mr) if (r.FixedBuild != null) withBuild++;
+                Check(mr.Count > 500 && withBuild > mr.Count / 2, "feeds: MSRC " + cur + " " + (body.Length / 1024 / 1024) + " MB fetched in " + sw.ElapsedMilliseconds + " ms (" + note + "), parsed " + mr.Count + " records in " + p.ElapsedMilliseconds + " ms, " + withBuild + " with FixedBuild");
                 OsInfo os = Inventory.Os(); List<Finding> ff = Resolve.Msrc(mr, os, new HashSet<string>(), new List<Software>(), new RebootInfo()); int vul = 0; foreach (Finding x in ff) if (x.Open) vul++;
-                Check(ff.Count > 0, "feeds: " + ff.Count + " CVEs apply to build " + os.FullBuild + " in " + rel[0] + ", " + vul + " open with no KB knowledge");
+                Check(ff.Count > 0, "feeds: " + ff.Count + " CVEs apply to build " + os.FullBuild + " in " + cur + ", " + vul + " open with no KB knowledge");
             }
             catch (Exception ex) { Check(false, "feeds: " + ex.Message); }
         }
@@ -454,6 +505,148 @@ namespace PSTools
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
+        // ── the collection bundle (.ptb) and the engagement file ──
+        static int IndexOf(byte[] hay, byte[] needle) { for (int i = 0; i + needle.Length <= hay.Length; i++) { int j = 0; while (j < needle.Length && hay[i + j] == needle[j]) j++; if (j == needle.Length) return i; } return -1; }
+        static void Bundle_()
+        {
+            // the writer is the twin of the parser: a tree survives write → parse → write unchanged
+            Dictionary<string, object> t = new Dictionary<string, object>(); t["s"] = "q\"\\ é\n\t"; t["n"] = 2.5; t["i"] = 42; t["b"] = true; t["z"] = null; t["l"] = new List<object>(new object[] { 1, "x", false, null }); Dictionary<string, object> inner = new Dictionary<string, object>(); inner["k"] = -3e2; t["o"] = inner; t["d"] = new DateTime(2026, 10, 13, 7, 4, 5, DateTimeKind.Utc); t["e"] = new List<object>();
+            Check(JsonWrite.Int(42, 0) == 42 && JsonWrite.Int(42.0, 0) == 42 && JsonWrite.Int("7", 0) == 7 && JsonWrite.Int("x", -1) == -1 && Json.S(5) == "5" && JsonWrite.Date(new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc)).HasValue, "json read: boxed ints, doubles and numeric strings all read as numbers; a boxed DateTime reads as a date (trees built in-process, not only parsed ones)");
+            string j1 = JsonWrite.Text(t, true); string j2 = JsonWrite.Text(Json.Parse(j1), true);
+            Check(j1 == j2 && j1.Contains("\"d\": \"2026-10-13T07:04:05Z\"") && JsonWrite.Text(t, false).IndexOf('\n') < 0 && (string)Json.Get(Json.Parse(j1), "s") == "q\"\\ é\n\t", "json write: tree → text → parse → text is stable; dates are ISO UTC; compact form has no newlines; escapes round-trip");
+            Bundle b = new Bundle(); b.Manifest["host"] = "HOST1"; b.Manifest["runId"] = "r1"; b.Manifest["platform"] = "windows"; Dictionary<string, object> inv = new Dictionary<string, object>(); inv["os"] = "Windows 11"; b["inventory"] = inv; b.Module("inventory", "ok", 1, 12, null);
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-ptb-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                string p = Path.Combine(dir, "a.ptb"); b.Save(p, BundleKey.FromPassphrase("correct horse")); Bundle r = Bundle.Load(p, BundleKey.FromPassphrase("correct horse"));
+                Check(r.Host == "HOST1" && Json.GetS(r["inventory"], "os") == "Windows 11" && r.Modules.Count == 1 && r.ModuleStatus("inventory") == "ok" && Bundle.ModeOf(p) == "passphrase", "bundle: passphrase seal → open round-trips the manifest, sections and module list");
+                string err = ""; try { Bundle.Load(p, BundleKey.FromPassphrase("wrong")); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("integrity"), "bundle: a wrong passphrase is refused (" + err + ")");
+                byte[] raw = File.ReadAllBytes(p); Check(IndexOf(raw, Encoding.UTF8.GetBytes("HOST1")) < 0 && IndexOf(raw, Encoding.UTF8.GetBytes("Windows 11")) < 0, "bundle: the sealed file does not contain the plaintext");
+                byte[] bit = (byte[])raw.Clone(); bit[bit.Length - 40] ^= 0x01; File.WriteAllBytes(p + ".bit", bit); err = ""; try { Bundle.Load(p + ".bit", BundleKey.FromPassphrase("correct horse")); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("integrity"), "bundle: a flipped ciphertext bit is refused (" + err + ")");
+                byte[] cut = new byte[raw.Length - 20]; Buffer.BlockCopy(raw, 0, cut, 0, cut.Length); File.WriteAllBytes(p + ".cut", cut); err = ""; try { Bundle.Load(p + ".cut", BundleKey.FromPassphrase("correct horse")); } catch (BundleException ex) { err = ex.Message; } Check(err.Length > 0, "bundle: a truncated file is refused (" + err + ")");
+                // public-key mode: the collector only ever holds the public half
+                string pub, priv; BundleCrypto.NewKeyPair(2048, out pub, out priv); string p2 = Path.Combine(dir, "b.ptb"); b.Save(p2, BundleKey.ToPublic(pub));
+                Check(Bundle.ModeOf(p2) == "public-key" && Bundle.Load(p2, BundleKey.WithPrivate(priv)).Host == "HOST1" && BundleCrypto.KeyId(pub) == BundleCrypto.KeyId(BundleCrypto.PublicOf(priv)), "bundle: sealed to the engagement public key, opened with the private key; key id agrees both ways");
+                string pub2, priv2; BundleCrypto.NewKeyPair(2048, out pub2, out priv2); err = ""; try { Bundle.Load(p2, BundleKey.WithPrivate(priv2)); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("different"), "bundle: another engagement's private key is refused by key id (" + err + ")");
+                err = ""; try { Bundle.Load(p2, BundleKey.FromPassphrase("x")); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("private key"), "bundle: a passphrase cannot open a key-sealed bundle (" + err + ")");
+                // plain mode is explicit and still integrity-checked
+                string p3 = Path.Combine(dir, "c.ptb"); b.Save(p3, BundleKey.None()); Check(Bundle.ModeOf(p3) == "plain" && Bundle.Load(p3, BundleKey.None()).RunId == "r1", "bundle: explicit plain mode round-trips");
+                raw = File.ReadAllBytes(p3); raw[raw.Length - 40] ^= 0x40; File.WriteAllBytes(p3, raw); err = ""; try { Bundle.Load(p3, BundleKey.None()); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("modified"), "bundle: a modified plain bundle fails its hash (" + err + ")");
+                err = ""; try { Bundle.FromJson("{\"manifest\":{\"schema\":\"ptb/2\"}}"); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("ptb/2"), "bundle: an unknown schema is refused, not guessed");
+                err = ""; try { Bundle.Load(Path.Combine(dir, "nothing.ptb"), BundleKey.None()); } catch (FileNotFoundException) { err = "missing"; } Check(err == "missing", "bundle: a missing file surfaces as FileNotFound, not as a crypto error");
+                // DPAPI for the private key at rest on the controller
+                byte[] prot = BundleCrypto.Protect(Encoding.UTF8.GetBytes(priv), "eng-1"); Check(IndexOf(prot, Encoding.UTF8.GetBytes("<RSAKeyValue>")) < 0 && Encoding.UTF8.GetString(BundleCrypto.Unprotect(prot, "eng-1")) == priv, "bundle: DPAPI-protected private key is opaque at rest and comes back intact");
+                err = ""; try { BundleCrypto.Unprotect(prot, "eng-2"); } catch (BundleException ex) { err = ex.Message; } Check(err.Length > 0, "bundle: a DPAPI blob with another engagement's entropy is refused");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        static void Engagement_()
+        {
+            Engagement e = new Engagement(); e.Id = "ENG-2026-001"; e.Client = "Acme"; e.Operator = "ops"; e.Scope.AddRange(new string[] { "10.0.0.0/24", "WS-FIN-01", "192.168.5.7" }); e.WindowStartUtc = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc); e.WindowEndUtc = new DateTime(2026, 10, 31, 0, 0, 0, DateTimeKind.Utc); e.Modules.Add("inventory"); e.RetentionDays = 30;
+            string why;
+            Check(e.InScope("10.0.0.205", out why) && e.InScope("ws-fin-01", out why) && e.InScope("192.168.5.7", out why), "engagement: CIDR, host name (case-insensitive) and exact IP are in scope");
+            Check(!e.InScope("10.0.1.5", out why) && !e.InScope("WS-FIN-02", out why) && why.Length > 0, "engagement: outside the CIDR / an unlisted host is out of scope (" + why + ")");
+            Check(!new Engagement().InScope("10.0.0.1", out why), "engagement: an empty scope allows nothing (fail closed)");
+            Check(e.InWindow(new DateTime(2026, 10, 13, 12, 0, 0, DateTimeKind.Utc), out why) && !e.InWindow(new DateTime(2026, 11, 2, 0, 0, 0, DateTimeKind.Utc), out why) && why.Contains("closed"), "engagement: the time window is enforced (" + why + ")");
+            Check(e.ModuleAllowed("inventory") && !e.ModuleAllowed("secrets") && new Engagement().ModuleAllowed("recon"), "engagement: module allow-list; an empty list allows every read-only module");
+            string f = Path.Combine(Path.GetTempPath(), "pstools-eng-" + Guid.NewGuid().ToString("N") + ".json");
+            try { e.Save(f); Engagement r = Engagement.Load(f); Check(r.Id == e.Id && r.Scope.Count == 3 && r.WindowEndUtc == e.WindowEndUtc && r.RetentionDays == 30 && r.Modules.Count == 1 && r.Validate().Count == 0, "engagement: file round-trip, valid"); }
+            finally { try { File.Delete(f); } catch { } }
+            Engagement bad = new Engagement(); bad.Scope.Add("300.1.1.1/40"); bad.WindowStartUtc = new DateTime(2026, 2, 1); bad.WindowEndUtc = new DateTime(2026, 1, 1); List<string> errs = bad.Validate(); Check(errs.Count == 3, "engagement: validation names the missing id, the bad CIDR and the inverted window (" + string.Join("; ", errs.ToArray()) + ")");
+        }
+        static void Collect_()
+        {
+            // codecs: engine objects → tree → text → tree → objects, field for field
+            Software s = new Software(); s.Name = "7-Zip 24.08"; s.Version = "24.08"; s.Publisher = "Igor Pavlov"; s.InstallDate = "20250102"; s.Scope = "machine"; s.Vendor = "7-zip"; s.Product = "7-zip";
+            Software s2 = Codec.SoftwareFrom(Json.Parse(JsonWrite.Text(Codec.Software(s)))); Software un = new Software(); un.Name = "Thing"; Software un2 = Codec.SoftwareFrom(Json.Parse(JsonWrite.Text(Codec.Software(un))));
+            Check(s2.Name == s.Name && s2.Version == s.Version && s2.Vendor == "7-zip" && s2.Mapped && s2.Installed == "2025-01-02" && !un2.Mapped && un2.Vendor == null, "codec: software round-trips, mapped and unmapped alike");
+            OsInfo os = new OsInfo(); os.ProductName = "Windows 11 Pro"; os.Major = 10; os.Build = 26100; os.Ubr = 4000; os.Arch = "x64"; os.Host = "H"; os.Installed = new DateTime(2025, 12, 1, 0, 0, 0, DateTimeKind.Utc);
+            OsInfo os2 = Codec.OsFrom(Json.Parse(JsonWrite.Text(Codec.Os(os)))); Check(os2.FullBuild == "10.0.26100.4000" && os2.ProductName == os.ProductName && os2.Installed.HasValue && os2.Installed.Value == os.Installed.Value, "codec: OS build identity and install date round-trip");
+            Hotfix h = new Hotfix(); h.Kb = "5060000"; h.Source = "QFE"; h.InstalledOn = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc); Hotfix h2 = Codec.HotfixFrom(Json.Parse(JsonWrite.Text(Codec.Hotfix(h)))); Check(h2.Kb == "5060000" && h2.Source == "QFE" && h2.InstalledOn.HasValue && h2.InstalledOn.Value == h.InstalledOn.Value, "codec: hotfix round-trips with its date");
+            Finding f = new Finding(); f.Cve = "CVE-2026-1"; f.Severity = "Important"; f.Status = "vulnerable"; f.Cvss = 7.8; f.Epss = 0.42; f.Kev = true; f.Fix = "KB1"; f.Source = "MSRC"; f.Product = "Windows 11"; f.Evidence = "e"; f.Url = "u";
+            Finding f2 = Codec.FindingFrom(Json.Parse(JsonWrite.Text(Codec.Finding(f)))); Check(f2.Cve == "CVE-2026-1" && f2.Open && f2.Kev && f2.Cvss == 7.8 && f2.Epss == 0.42 && f2.SeverityNorm == "High" && f2.Fix == "KB1", "codec: finding round-trips (status, KEV, CVSS, EPSS)");
+            MissingUpdate mu = new MissingUpdate(); mu.Kb = "5066000"; mu.Title = "CU"; mu.Cves.Add("CVE-2026-2"); mu.Kind = "security"; MissingUpdate mu2 = Codec.MissingFrom(Json.Parse(JsonWrite.Text(Codec.Missing(mu)))); Check(mu2.Kb == "5066000" && mu2.Cves.Count == 1 && mu2.Kind == "security", "codec: missing update round-trips with its CVE list");
+            RebootInfo rb = new RebootInfo(); rb.Cbs = true; RebootInfo rb2 = Codec.RebootFrom(Json.Parse(JsonWrite.Text(Codec.Reboot(rb)))); Check(rb2.Pending && rb2.Cbs && !rb2.WindowsUpdate, "codec: reboot state round-trips");
+            CheckItem ci = new CheckItem("Accounts", "Guest account", "Is it off?", "pass", "disabled", "net user"); ci.Id = "PT-W-ACC-001"; CheckItem ci2 = Codec.CheckFrom(Json.Parse(JsonWrite.Text(Codec.Check(ci)))); Check(ci2.Id == "PT-W-ACC-001" && ci2.Status == "pass" && ci2.Name == "Guest account" && ci2.Evidence == "net user", "codec: checklist item round-trips with its id");
+            SecretHit sh = new SecretHit(); sh.Kind = "GitHub token"; sh.Severity = "high"; sh.Path = "C:\\x\\.env"; sh.File = ".env"; sh.Line = 3; sh.Match = "ghp_SECRETVALUE1234567890abcdefghij"; sh.Preview = "ghp_••••••hij";
+            string st = JsonWrite.Text(Codec.Secret(sh)); Check(st.IndexOf("SECRETVALUE") < 0 && st.Contains("\"sha256\"") && st.Contains("ghp_••••••hij"), "codec: a secret hit carries kind, place, masked preview and a hash - never the secret");
+            // a real collection on this machine: the fast modules only
+            Collector c = new Collector(); c.Modules.Clear(); c.Modules.AddRange(new string[] { "inventory", "network" }); c.Online = false; c.WuHistory = false;
+            Stopwatch sw = Stopwatch.StartNew(); Bundle b = c.Run(); sw.Stop();
+            object inv = b["inventory"]; object net = b["network"];
+            Check(b.Host == Environment.MachineName && b.Platform == "windows" && b.RunId.Length > 0 && Json.GetS(b.Manifest, "collector", "name") == "PowerTowerCollect" && Json.GetS(b.Manifest, "privilegeTier") != null && b.Manifest.ContainsKey("finishedUtc"), "collect: manifest carries host, platform, run id, collector identity, privilege tier and timings");
+            Check(b.ModuleStatus("inventory") == "ok" && Json.Arr(Json.Get(inv, "software")).Count > 5 && Json.Arr(Json.Get(inv, "hotfixes")).Count > 0 && Json.GetS(inv, "os", "fullBuild").Split('.').Length == 4 && (Json.GetS(inv, "missingStatus") ?? "").StartsWith("not searched"), "collect: inventory has software, hotfixes, the OS build, and says the missing-update search was not run offline (" + sw.Elapsed.TotalSeconds.ToString("N1") + " s)");
+            Check(b.ModuleStatus("network") == "ok" && Json.Arr(Json.Get(net, "connections")).Count > 0 && Json.Arr(Json.Get(net, "firewall", "rules")).Count > 0, "collect: network has connections and firewall rules");
+            Check(b.ModuleStatus("checklist") == null && b["checklist"] == null, "collect: modules not asked for are absent, not failed");
+            string tmp = Path.Combine(Path.GetTempPath(), "pstools-collect-" + Guid.NewGuid().ToString("N") + ".ptb");
+            try { b.Save(tmp, BundleKey.None()); Bundle r = Bundle.Load(tmp, BundleKey.None()); Check(Json.Arr(Json.Get(r["inventory"], "software")).Count == Json.Arr(Json.Get(inv, "software")).Count && r.Modules.Count == b.Modules.Count && Codec.OsFrom(Json.Get(r["inventory"], "os")).FullBuild == Inventory.Os().FullBuild, "collect: the saved bundle reloads with the same counts and the same OS build"); }
+            finally { try { File.Delete(tmp); } catch { } }
+            // the engagement gate: wrong scope refuses to run; the module allow-list skips, not fails
+            Engagement eg = new Engagement(); eg.Id = "E"; eg.Scope.Add("192.0.2.1"); Collector c2 = new Collector(); c2.Modules.Clear(); c2.Modules.Add("inventory"); c2.Engagement = eg; string err = ""; try { c2.Run(); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("scope"), "collect: a host outside the engagement scope is refused before anything is read (" + err + ")");
+            eg.Scope.Clear(); eg.Scope.Add("*"); eg.Modules.Add("network"); Collector c3 = new Collector(); c3.Modules.Clear(); c3.Modules.AddRange(new string[] { "inventory", "network" }); c3.Engagement = eg; c3.WuHistory = false; Bundle b3 = c3.Run();
+            Check(b3.ModuleStatus("inventory") == "skipped" && b3.ModuleStatus("network") == "ok" && Json.GetS(b3.Manifest, "engagementId") == "E", "collect: modules outside the engagement allow-list are skipped and recorded");
+            // the IOC sweep finds this very process by hash
+            string me = System.Reflection.Assembly.GetExecutingAssembly().Location; string myHash = BundleCrypto.FileSha256(me); string ioc = Path.Combine(Path.GetTempPath(), "pstools-ioc-" + Guid.NewGuid().ToString("N") + ".txt");
+            try
+            {
+                File.WriteAllText(ioc, "# test list\nevil.example-c2.net\n203.0.113.9\n" + myHash + "\n");
+                Collector c4 = new Collector(); c4.Modules.Clear(); c4.Modules.AddRange(new string[] { "network", "ioc" }); c4.IocFile = ioc; sw.Restart(); Bundle b4 = c4.Run(); sw.Stop(); object io = b4["ioc"];
+                bool hit = false; foreach (object m in Json.Arr(Json.Get(io, "matches"))) if (Json.GetS(m, "type") == "hash" && string.Equals(Json.GetS(m, "value"), myHash, StringComparison.OrdinalIgnoreCase)) hit = true;
+                Check(b4.ModuleStatus("ioc") == "ok" && JsonWrite.Int(Json.Get(io, "counts", "hashes"), 0) == 1 && JsonWrite.Int(Json.Get(io, "counts", "domains"), 0) == 1 && JsonWrite.Int(Json.Get(io, "counts", "ips"), 0) == 1 && hit, "collect: IOC sweep parses the list (1 domain, 1 IP, 1 hash) and matches this process image by SHA-256 (" + JsonWrite.Int(Json.Get(io, "imagesHashed"), 0) + " images hashed in " + sw.Elapsed.TotalSeconds.ToString("N1") + " s; status " + b4.ModuleStatus("ioc") + "; counts " + JsonWrite.Text(Json.Get(io, "counts"), false) + "; processes " + JsonWrite.Int(Json.Get(io, "processes"), -1) + " noPath " + JsonWrite.Int(Json.Get(io, "processesWithoutPath"), -1) + " paths " + JsonWrite.Int(Json.Get(io, "imagePaths"), -1) + " skipped " + JsonWrite.Int(Json.Get(io, "imagesSkipped"), -1) + " hashErrors " + JsonWrite.Int(Json.Get(io, "hashErrors"), -1) + "; errors " + string.Join(" | ", JsonWrite.Strings(Json.Get(b4.Modules[b4.Modules.Count - 1], "errors")).ToArray()) + ")");
+            }
+            finally { try { File.Delete(ioc); } catch { } }
+            // the option mapping both front-ends share
+            Collector c5 = new Collector(); Dictionary<string, string> opt = new Dictionary<string, string>(); opt["modules"] = "inventory, bogus";
+            string e5 = CollectOptions.Apply(c5, delegate (string n) { string v; return opt.TryGetValue(n, out v) ? v : null; }, delegate (string n) { return opt.ContainsKey(n); }, delegate (string n) { return new List<string>(); });
+            Check(e5 != null && e5.Contains("bogus"), "collect options: an unknown module is a usage error, not a silent skip (" + e5 + ")");
+            opt["modules"] = "ioc"; e5 = CollectOptions.Apply(new Collector(), delegate (string n) { string v; return opt.TryGetValue(n, out v) ? v : null; }, delegate (string n) { return opt.ContainsKey(n); }, delegate (string n) { return new List<string>(); });
+            Check(e5 != null && e5.Contains("--ioc"), "collect options: the ioc module without a list is a usage error");
+            string ke; BundleKey k0 = CollectOptions.Key(new Collector(), delegate (string n) { return null; }, delegate (string n) { return false; }, out ke); Check(k0 == null && ke.Contains("--plain"), "collect options: no sealing choice is a usage error that names the choices (never silently plain)");
+        }
+        // ── FUZZ's four Major findings: PT-20 plain-mode downgrade, PT-21 kdf cost from the file, PT-23 unbounded nesting, PT-22 destructive code in the collector ──
+        static byte[] Rehead(byte[] file, string kdfKey, object value)
+        {
+            int hlen = BitConverter.ToInt32(file, 4); Dictionary<string, object> h = Json.Obj(Json.Parse(Encoding.UTF8.GetString(file, 8, hlen)));
+            Dictionary<string, object> kdf = Json.Obj(h["kdf"]); kdf[kdfKey] = value; byte[] nh = Encoding.UTF8.GetBytes(JsonWrite.Text(h, false));
+            byte[] o = new byte[file.Length - hlen + nh.Length]; Buffer.BlockCopy(file, 0, o, 0, 4); Buffer.BlockCopy(BitConverter.GetBytes(nh.Length), 0, o, 4, 4); Buffer.BlockCopy(nh, 0, o, 8, nh.Length); Buffer.BlockCopy(file, 8 + hlen, o, 8 + nh.Length, file.Length - 8 - hlen); return o;
+        }
+        static void BundleGate_()
+        {
+            byte[] forged = BundleCrypto.Seal(Encoding.UTF8.GetBytes("{\"manifest\":{\"schema\":\"ptb/1\",\"host\":\"EVIL\"}}"), BundleKey.None());
+            string err = ""; try { BundleCrypto.Open(forged, BundleKey.FromPassphrase("correct horse")); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("not sealed"), "PT-20: a plain file is refused when a passphrase was given (" + err + ")");
+            string pub, priv; BundleCrypto.NewKeyPair(2048, out pub, out priv);
+            err = ""; try { BundleCrypto.Open(forged, BundleKey.WithPrivate(priv)); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("not sealed"), "PT-20: a plain file is refused when an engagement private key was given");
+            Check(Encoding.UTF8.GetString(BundleCrypto.Open(forged, BundleKey.None())).Contains("EVIL") && Encoding.UTF8.GetString(BundleCrypto.Open(forged, null)).Contains("EVIL"), "PT-20: an explicit plain key (or none) still opens a plain file - the lab workflow keeps working");
+            byte[] sealedP = BundleCrypto.Seal(Encoding.UTF8.GetBytes("{\"a\":1}"), BundleKey.FromPassphrase("correct horse"));
+            Stopwatch sw = Stopwatch.StartNew(); err = ""; try { BundleCrypto.Open(Rehead(sealedP, "iterations", 100000000), BundleKey.FromPassphrase("correct horse")); } catch (BundleException ex) { err = ex.Message; } sw.Stop();
+            Check(err.Contains("unsupported kdf cost") && sw.ElapsedMilliseconds < 1000, "PT-21: a header claiming 100,000,000 iterations is refused in " + sw.ElapsedMilliseconds + " ms (" + err + ")");
+            sw.Restart(); err = ""; try { BundleCrypto.Open(Rehead(sealedP, "iterations", 2147483647), BundleKey.FromPassphrase("correct horse")); } catch (BundleException ex) { err = ex.Message; } sw.Stop(); Check(err.Length > 0 && sw.ElapsedMilliseconds < 1000, "PT-21: int.MaxValue iterations refused in " + sw.ElapsedMilliseconds + " ms");
+            err = ""; try { BundleCrypto.Open(Rehead(sealedP, "iterations", 1000), BundleKey.FromPassphrase("correct horse")); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("below"), "PT-21: a header downgrading the cost below this build's minimum is refused (" + err + ")");
+            BundleKey legacy = BundleKey.FromPassphrase("correct horse"); legacy.AllowLegacyKdf = true; err = ""; try { BundleCrypto.Open(Rehead(sealedP, "iterations", 1000), legacy); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("integrity"), "PT-21: with AllowLegacyKdf the low count is derived and the (now wrong) MAC is what refuses it (" + err + ")");
+            Check(Encoding.UTF8.GetString(BundleCrypto.Open(sealedP, BundleKey.FromPassphrase("correct horse"))) == "{\"a\":1}", "PT-21: an untouched passphrase bundle still opens");
+            foreach (int n in new int[] { 10000, 100000 }) { string deep = new string('[', n) + new string(']', n); bool fe = false; try { Json.Parse(deep); } catch (FormatException ex) { fe = ex.Message.Contains("nesting"); } Check(fe, "PT-23: Json.Parse at depth " + n.ToString("N0") + " throws FormatException(nesting too deep), no stack overflow"); }
+            StringBuilder deepObj = new StringBuilder(); for (int i = 0; i < 10000; i++) deepObj.Append("{\"a\":"); deepObj.Append('1'); for (int i = 0; i < 10000; i++) deepObj.Append('}'); bool fe2 = false; try { Json.Parse(deepObj.ToString()); } catch (FormatException) { fe2 = true; } Check(fe2, "PT-23: nested objects hit the same limit");
+            List<object> root = new List<object>(), cur = root; for (int i = 0; i < 100000; i++) { List<object> next = new List<object>(); cur.Add(next); cur = next; }
+            bool fw = false; try { JsonWrite.Text(root, false); } catch (FormatException ex) { fw = ex.Message.Contains("nesting"); } Check(fw, "PT-23: JsonWrite at depth 100,000 throws FormatException, no stack overflow");
+            string ok150 = new string('[', 150) + new string(']', 150); Check(Json.Parse(ok150) is List<object> && JsonWrite.Text(Json.Parse(ok150), false) == ok150, "PT-23: depth 150 (under the " + Json.MaxDepth + " limit) still parses and writes");
+        }
+        static void CollectorAssembly_()
+        {
+            string exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCollect.exe");
+            if (!File.Exists(exe)) { Check(false, "PT-22: PowerTowerCollect.exe not found next to Tests.exe"); return; }
+            System.Reflection.Assembly a = System.Reflection.Assembly.LoadFrom(exe); Type[] types = a.GetTypes();
+            HashSet<string> names = new HashSet<string>(); foreach (Type t in types) names.Add(t.Name);
+            Check(names.Contains("Collector") && names.Contains("Hosts") && names.Contains("Autoruns") && !names.Contains("ActiveTests") && !names.Contains("DupeScan") && !names.Contains("Cli") && !names.Contains("CliTools"), "PT-22: the collector carries the engines and no ActiveTests, duplicates or CLI framework (" + types.Length + " types)");
+            string[] banned = { "Encrypt", "Decrypt", "SecureWipe", "Eicar", "EicarBytes", "AppControl", "SetEnabled", "Delete", "SetBlocked", "Recycle", "Restore" };
+            List<string> hits = new List<string>(); System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly;
+            foreach (Type t in types) { if (t.Namespace != "PSTools") continue; foreach (System.Reflection.MethodInfo m in t.GetMethods(all)) { bool bad = m.Name.Contains("Wipe") || m.Name.Contains("Eicar"); foreach (string b in banned) if (m.Name == b) bad = true; if (bad) hits.Add(t.Name + "." + m.Name); } }
+            Check(hits.Count == 0, "PT-22: no destructive method in the collector assembly" + (hits.Count > 0 ? ": " + string.Join(", ", hits.ToArray()) : ""));
+            Type hosts = a.GetType("PSTools.Hosts"), fc = a.GetType("PSTools.FileCrypto"), ar = a.GetType("PSTools.Autoruns"), fwl = a.GetType("PSTools.Firewall");
+            Check(hosts != null && hosts.GetMethod("Entries") != null && hosts.GetMethod("Write") == null && hosts.GetMethod("Add") == null && hosts.GetMethod("Remove") == null && hosts.GetMethod("Backup") == null && hosts.GetMethod("Restore") == null, "PT-22: Hosts in the collector reads (Entries) but has no Write/Add/Remove/Backup/Restore");
+            Check(fc != null && fc.GetMethod("IsEncrypted") != null && fc.GetMethod("Encrypt") == null && fc.GetMethod("Decrypt") == null && fc.GetMethod("SecureWipe") == null && fc.GetMethod("Verify") == null, "PT-22: FileCrypto in the collector only recognises its files");
+            Check(ar != null && ar.GetMethod("Collect") != null && ar.GetMethod("SetEnabled") == null && ar.GetMethod("Delete") == null, "PT-22: Autoruns in the collector collects but cannot toggle or delete");
+            Check(fwl != null && fwl.GetMethod("GetBlocked") != null && fwl.GetMethod("SetBlocked") == null, "PT-22: the blocker's Firewall class in the collector reads the rule but cannot set it");
+        }
         static void Secrets_()
         {
             string dir = Path.Combine(Path.GetTempPath(), "pstools-sec-" + Guid.NewGuid().ToString("N"));
@@ -466,6 +659,11 @@ namespace PSTools
                 bool pem = false, gh = false, masked = true; foreach (SecretHit h in hits) { if (h.Kind.Contains("Private key")) pem = true; if (h.Kind.Contains("GitHub")) gh = true; if (h.Preview.IndexOf('•') < 0 && h.Kind.Contains("GitHub")) masked = false; }
                 Check(pem && gh, "secrets: found the PEM key and the GitHub token (" + hits.Count + " hit(s))");
                 Check(masked, "secrets: the token preview is masked");
+                File.WriteAllText(Path.Combine(dir, "real.txt"), "token=ghp_Xk93mQ7rLpZ1234567vB8nT4yHc6WdJf1aSe\nAWS=AKIAZ3none9dummyQ7XK\npassword=123456\napi_key=YOUR_API_KEY_GOES_HERE_1\n");   // PT-04: a real vendor token that contains "123456" / "none" / "dummy" is still reported
+                hits.Clear(); sc = new SecretsScan(); sc.Roots = new List<string>(new string[] { dir }); sc.Run(delegate (SecretHit h) { if (h.File == "real.txt") hits.Add(h); }, null);
+                bool ghp = false, aws = false, weak = false, ph = false; foreach (SecretHit h in hits) { if (h.Kind.Contains("GitHub")) ghp = true; if (h.Kind.Contains("AWS access")) aws = true; if (h.Kind.Contains("Generic password")) weak = true; if (h.Kind.Contains("Generic API")) ph = true; }
+                Check(ghp && aws, "secrets: vendor tokens containing '123456' / 'none' / 'dummy' are still reported (PT-04)");
+                Check(!weak && !ph, "secrets: bare placeholder values (password=123456, YOUR_API_KEY...) are still filtered");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }

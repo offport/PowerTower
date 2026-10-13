@@ -13,8 +13,8 @@ namespace PSTools
 {
     public class SecretsPanel : ToolPanel
     {
-        public override string Title { get { return "Secrets Scanner"; } }
-        public override string Blurb { get { return "Search a folder or drive for exposed secrets: private keys, cloud API keys, tokens and passwords sitting in .env and config files. Each hit shows the file, line and a masked preview — the whole secret is never put on screen."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
 
         readonly DataView view; readonly StepStrip steps = new StepStrip(); readonly SelectionBar sel = new SelectionBar();
         readonly Button bScan, bCancel, bPick; readonly TextBox tRoot; readonly ComboBox cMaxKB; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
@@ -34,9 +34,7 @@ namespace PSTools
             foreach (Control c in new Control[] { lf, tRoot, bPick, bScan, bCancel, lm, cMaxKB, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sHits, sHigh, sFiles, sKinds, sScanned }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
-            view = NewView("secrets"); view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { return SevColor(((SecretHit)o).Severity); };
-            view.TreePath = delegate (object o) { SecretHit h = (SecretHit)o; return new string[] { h.Kind, h.File }; };
+            view = NewView("secrets"); view.Apply(Columns.Secrets());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "hit"); };
             view.Activated += delegate (object o) { SecretHit h = (SecretHit)o; Dialogs.OpenInExplorer(Path.GetDirectoryName(h.Path)); };
             view.Filter = FilterRow;
@@ -50,19 +48,6 @@ namespace PSTools
             flush.Interval = 300; flush.Tick += delegate { Flush(); };
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("sev", "Severity", 82, delegate (object o) { SecretHit h = (SecretHit)o; return h.Severity == "high" ? 0 : h.Severity == "medium" ? 1 : 2; }).Num(delegate (object o) { return ((SecretHit)o).Severity; }).Colour(delegate (object o) { return SevColor(((SecretHit)o).Severity); }));
-            c.Add(new Col("kind", "Kind", 180, delegate (object o) { return ((SecretHit)o).Kind; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("file", "File", 220, delegate (object o) { return ((SecretHit)o).File; }));
-            c.Add(new Col("line", "Line", 56, delegate (object o) { return ((SecretHit)o).Line; }).Num(delegate (object o) { return ((SecretHit)o).Line.ToString(); }));
-            c.Add(new Col("preview", "Masked preview", 260, delegate (object o) { return ((SecretHit)o).Preview; }).Colour(delegate (object o) { return Theme.Amber; }));
-            c.Add(new Col("where", "Location", 100, delegate (object o) { return ((SecretHit)o).Where; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("dir", "Folder", 420, delegate (object o) { return Path.GetDirectoryName(((SecretHit)o).Path) ?? ""; }).Colour(delegate (object o) { return Theme.Dim; }));
-            return c;
-        }
-        static Color SevColor(string s) { return s == "high" ? Theme.Rose : s == "medium" ? Theme.Amber : Theme.Blue; }
 
         bool FilterRow(object o)
         {

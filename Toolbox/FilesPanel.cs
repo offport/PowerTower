@@ -46,8 +46,8 @@ namespace PSTools
     // ═══════════════════════════════ File Explorer ═══════════════════════════════
     public class FileExplorerPanel : ToolPanel
     {
-        public override string Title { get { return "File Explorer"; } }
-        public override string Blurb { get { return "Browse the machine, pick files across folders, and act on the whole selection at once: encrypt them with a password, decrypt them back, or destroy them for good with a permanent delete or a secure wipe. Encryption is AES-256; a lost password cannot be recovered."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly TreeView tree = new TreeView(); readonly DataView view; readonly SelectionBar sel = new SelectionBar();
         readonly TextBox addr; readonly Button bUp, bGo, bRefresh, bNew; readonly CheckBox cHidden; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); readonly ProgressBar prog = new ProgressBar();
         string current; Thread worker; volatile bool busy; readonly SplitContainer split = new SplitContainer(); bool splitSet;
@@ -71,9 +71,7 @@ namespace PSTools
             tree.BeforeExpand += delegate (object s, TreeViewCancelEventArgs e) { PopulateNode(e.Node); }; tree.AfterSelect += delegate (object s, TreeViewEventArgs e) { if (e.Node.Tag is string) Navigate((string)e.Node.Tag, false); };
             split.Panel1.Controls.Add(tree);
             view = NewView("folder");
-            view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { FileEntry f = (FileEntry)o; return f.IsDir ? Theme.Teal : f.Encrypted ? Theme.Amber : Theme.Ink; };
-            view.TreePath = delegate (object o) { FileEntry f = (FileEntry)o; return new string[] { f.IsDir ? "folders" : "files", f.Name }; };
+            view.Apply(Columns.Folder());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "item"); };
             view.Activated += delegate (object o) { FileEntry f = (FileEntry)o; if (f.IsDir) Navigate(f.Path); else if (f.Encrypted) DecryptFiles(new List<FileEntry> { f }); else Open(f.Path); };
             split.Panel2.Controls.Add(view);
@@ -87,18 +85,6 @@ namespace PSTools
             Controls.Add(split); Controls.Add(sel); Controls.Add(bar); split.BringToFront();
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("name", "Name", 300, delegate (object o) { return ((FileEntry)o).Name; }));
-            c.Add(new Col("type", "Type", 90, delegate (object o) { return ((FileEntry)o).Kind; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("size", "Size", 100, delegate (object o) { return ((FileEntry)o).Size; }).Num(delegate (object o) { FileEntry f = (FileEntry)o; return f.IsDir ? "" : Fmt.Bytes(f.Size); }));
-            c.Add(new Col("mod", "Modified", 130, delegate (object o) { return ((FileEntry)o).Modified; }));
-            c.Add(new Col("sig", "Signature", 160, delegate (object o) { FileEntry f = (FileEntry)o; if (f.IsDir || !Trust.IsSignable(f.Path)) return ""; SigInfo si = Trust.Verify(f.Path); return si.Status.Length == 0 ? "" : si.Short; }).Colour(delegate (object o) { FileEntry f = (FileEntry)o; if (f.IsDir || !Trust.IsSignable(f.Path)) return Theme.Faint; SigInfo si = Trust.Verify(f.Path); return si.Status == "invalid" ? Theme.Rose : si.Status == "unsigned" ? Theme.Amber : si.Ok ? (si.Microsoft ? Theme.Dim : Theme.Green) : Theme.Faint; }));
-            c.Add(new Col("attr", "Attributes", 150, delegate (object o) { return ((FileEntry)o).AttrText; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("path", "Path", 460, delegate (object o) { return ((FileEntry)o).Path; }).Colour(delegate (object o) { return Theme.Dim; }));
-            return c;
-        }
 
         void SetSplit() { if (splitSet) return; try { if (split.Width > Theme.S(640)) { split.Panel1MinSize = Theme.S(150); split.Panel2MinSize = Theme.S(300); split.SplitterDistance = Theme.S(280); splitSet = true; } } catch { } }
         public override void OnShown()
@@ -282,12 +268,10 @@ namespace PSTools
     }
 
     // ═══════════════════════════════ Find Files ═══════════════════════════════
-    public class HashHit { public string Name = "", Path = "", Dir = "", Algo = "", Hash = ""; public long Size; public DateTime Modified; }
-
     public class FindPanel : ToolPanel
     {
-        public override string Title { get { return "Find Files"; } }
-        public override string Blurb { get { return "Find files anywhere on the machine. By name: type a full or partial name, or a *.ext wildcard, and it streams matches as it walks the drives. By hash: paste one or more MD5, SHA-1 or SHA-256 hashes and it reports every file that matches, with a size cap so it stays fast."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar();
         readonly Button bName, bHash, bGo, bCancel, bRoot, bPasteHash, bLoadHash; readonly TextBox tName, tHash; readonly Label tHashInfo; readonly CheckBox cCase, cSkipWin; readonly NumericUpDown nMax; readonly ComboBox cRoots; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall), lName, lHash, lMax, lmb, lRoot;
         readonly StepStrip steps = new StepStrip(); string mode = "name"; FastWalk walk; Thread worker; volatile bool busy; readonly List<object> pending = new List<object>(); readonly object plock = new object(); readonly System.Windows.Forms.Timer flush = new System.Windows.Forms.Timer(); int found; string customRoot;
@@ -337,28 +321,7 @@ namespace PSTools
             mode = m;
             foreach (Button b in new Button[] { bName, bHash }) { bool on = (b == bName && m == "name") || (b == bHash && m == "hash"); b.BackColor = on ? Theme.Panel3 : Theme.Panel2; b.ForeColor = on ? Theme.Teal : Theme.Ink; b.FlatAppearance.BorderColor = on ? Theme.Teal : Theme.Line; }
             bool name = m == "name"; foreach (Control c in new Control[] { lName, tName, cCase }) c.Visible = name; foreach (Control c in new Control[] { lHash, tHash, bPasteHash, bLoadHash, tHashInfo, lMax, nMax, lmb, cSkipWin }) c.Visible = !name;
-            view.ExportName = name ? "find-by-name" : "find-by-hash";
-            if (name)
-            {
-                List<Col> c = new List<Col>();
-                c.Add(new Col("name", "Name", 300, delegate (object o) { return ((FileEntry)o).Name; }));
-                c.Add(new Col("size", "Size", 100, delegate (object o) { return ((FileEntry)o).Size; }).Num(delegate (object o) { FileEntry f = (FileEntry)o; return f.IsDir ? "" : Fmt.Bytes(f.Size); }));
-                c.Add(new Col("mod", "Modified", 130, delegate (object o) { return ((FileEntry)o).Modified; }));
-                c.Add(new Col("type", "Type", 80, delegate (object o) { return ((FileEntry)o).Kind; }).Colour(delegate (object o) { return Theme.Dim; }));
-                c.Add(new Col("dir", "Folder", 480, delegate (object o) { return ((FileEntry)o).Dir; }).Colour(delegate (object o) { return Theme.Dim; }));
-                view.SetColumns(c); view.TreePath = delegate (object o) { FileEntry f = (FileEntry)o; return new string[] { f.Dir }; };
-            }
-            else
-            {
-                List<Col> c = new List<Col>();
-                c.Add(new Col("name", "File", 280, delegate (object o) { return ((HashHit)o).Name; }));
-                c.Add(new Col("algo", "Algorithm", 90, delegate (object o) { return ((HashHit)o).Algo; }).Colour(delegate (object o) { return Theme.Teal; }));
-                c.Add(new Col("hash", "Matched hash", 300, delegate (object o) { return ((HashHit)o).Hash; }).Colour(delegate (object o) { return Theme.Amber; }));
-                c.Add(new Col("size", "Size", 100, delegate (object o) { return ((HashHit)o).Size; }).Num(delegate (object o) { return Fmt.Bytes(((HashHit)o).Size); }));
-                c.Add(new Col("mod", "Modified", 130, delegate (object o) { return ((HashHit)o).Modified; }));
-                c.Add(new Col("path", "Path", 460, delegate (object o) { return ((HashHit)o).Path; }).Colour(delegate (object o) { return Theme.Dim; }));
-                view.SetColumns(c); view.TreePath = delegate (object o) { return new string[] { ((HashHit)o).Algo, ((HashHit)o).Dir }; };
-            }
+            view.Apply(name ? Columns.FindByName() : Columns.FindByHash());
             view.SetItems(new object[0], false);
         }
 

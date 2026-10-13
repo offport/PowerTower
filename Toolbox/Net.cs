@@ -28,14 +28,14 @@ namespace PSTools
     {
         static readonly HashSet<string> KnownTld = new HashSet<string>(("com net org edu gov mil int arpa io dev app ai co info biz me tv cc xyz cloud online site tech store shop blog news email network systems solutions services digital software agency company global group live media space today top club vip pro museum name mobi asia jobs tel travel aero coop post cyber tools zone host link click download page web world run team life works studio design center city expert guru ninja rocks fund money finance bank health care clinic legal law tax market sale deals codes gift games game play events photo photos video film movie music audio radio social community forum wiki review directory guide academy school college university institute science research lab data analytics server hosting domains mail mobile phone software hardware technology energy farm garden cafe restaurant bar coffee kitchen food fitness gym sport sports golf tennis cars auto rent taxi hotel holiday travel casino bet poker ltd llc inc gmbh plc srl").Split(' '));
         static readonly HashSet<string> ExtCollide = new HashSet<string>("md sh py pl rs ps so cs gz db js ts rb go vb".Split(' '));
-        static readonly Regex RxIPv4 = new Regex(@"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])", RegexOptions.Compiled);
+        static readonly Regex RxIPv4 = new Regex(@"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![\d.])", RegexOptions.Compiled);
         // candidate runs of hex groups and colons; IPAddress.TryParse decides (the script's pattern could not match the "beef::1" form)
         static readonly Regex RxIPv6 = new Regex(@"(?i)(?<![\w:.])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:.])", RegexOptions.Compiled);
         static readonly Regex RxDomain = new Regex(@"(?i)(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:xn--[a-z0-9-]{2,59}|[a-z]{2,24})(?![\w-])", RegexOptions.Compiled);
 
         public static string Normalize(string l)
         {
-            string s = l;
+            string s = Regex.Replace(l, @"\s{2,}", " ");   // collapse whitespace runs first: the \s*\.\s* pass below is quadratic on a long run (100k spaces took minutes)
             s = Regex.Replace(s, @"(?i)hxxps?://", "http://");
             s = Regex.Replace(s, @"(?i)\[\s*(?:\.|dot)\s*\]|\(\s*(?:\.|dot)\s*\)|\{\s*(?:\.|dot)\s*\}", ".");
             s = Regex.Replace(s, @"(?i)\[\s*:\s*\]|\(\s*:\s*\)", ":");
@@ -118,21 +118,13 @@ namespace PSTools
     // ───────────────────────────── the hosts file ─────────────────────────────
     public class HostsEntry { public string Host, Sink; public int LineNo; public bool Ours; }
 
-    public class Hosts
+    public partial class Hosts   // the read half; HostsWrite.cs holds Backup/Write/Add/Remove/Restore and is left out of the collector
     {
         public const string Marker = "# BLOCK-HOSTS";
         public string Path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32\\drivers\\etc\\hosts");
         public string BackupDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "BlockHosts\\backups");
 
         public string[] Read() { return File.Exists(Path) ? File.ReadAllLines(Path) : new string[0]; }
-        public void Write(IList<string> lines) { File.WriteAllLines(Path, lines, Encoding.ASCII); }
-        public string Backup()
-        {
-            Directory.CreateDirectory(BackupDir);
-            string dest = System.IO.Path.Combine(BackupDir, "hosts-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".bak");
-            if (File.Exists(Path)) File.Copy(Path, dest, true); else File.WriteAllText(dest, "");
-            return dest;
-        }
         public List<FileInfo> Backups()
         {
             List<FileInfo> l = new List<FileInfo>();
@@ -158,52 +150,10 @@ namespace PSTools
             }
             return l;
         }
-        public class AddResult { public int Added, Skipped; public string Backup; public List<string> AddedHosts = new List<string>(); }
-        public AddResult Add(IEnumerable<string> domains, string sink)
-        {
-            AddResult r = new AddResult(); r.Backup = Backup();
-            List<string> lines = new List<string>(Read());
-            HashSet<string> present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string l in lines) foreach (string tok in Regex.Split(l, @"\s+")) if (tok.Length > 0 && !tok.StartsWith("#") && !char.IsDigit(tok[0])) present.Add(tok);
-            List<string> append = new List<string>();
-            foreach (string d in domains)
-            {
-                if (present.Contains(d)) { r.Skipped++; continue; }
-                append.Add(sink + "\t" + d + "\t" + Marker); r.AddedHosts.Add(d); present.Add(d); r.Added++;
-            }
-            if (append.Count > 0)
-            {
-                if (lines.Count > 0 && lines[lines.Count - 1].Trim().Length > 0) lines.Add("");
-                lines.Add("# added by Block-Hosts " + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
-                lines.AddRange(append);
-                Write(lines);
-            }
-            return r;
-        }
-        public class RemoveResult { public int Removed; public string Backup; }
-        /// <summary>Drops only lines carrying the marker whose host is in the set. Hand-written lines are never touched.</summary>
-        public RemoveResult Remove(IEnumerable<string> hosts)
-        {
-            RemoveResult r = new RemoveResult(); HashSet<string> set = new HashSet<string>(hosts, StringComparer.OrdinalIgnoreCase);
-            r.Backup = Backup();
-            List<string> kept = new List<string>();
-            foreach (string l in Read())
-            {
-                if (Regex.IsMatch(l, Regex.Escape(Marker) + @"\s*$"))
-                {
-                    string[] parts = Regex.Split(Regex.Replace(l, Regex.Escape(Marker), "").Trim(), @"\s+");
-                    if (parts.Length >= 2 && set.Contains(parts[1])) { r.Removed++; continue; }
-                }
-                kept.Add(l);
-            }
-            Write(kept);
-            return r;
-        }
-        public string Restore(string backupFile) { string safety = Backup(); File.Copy(backupFile, Path, true); return safety; }
     }
 
     // ───────────────────────────── the firewall rule (COM, no cmdlets needed) ─────────────────────────────
-    public static class Firewall
+    public static partial class Firewall   // the read half; FirewallWrite.cs holds SetBlocked and is left out of the collector
     {
         public const string RuleName = "BLOCK-HOSTS blocked IPs";
         static dynamic Policy() { Type t = Type.GetTypeFromProgID("HNetCfg.FwPolicy2"); if (t == null) throw new InvalidOperationException("Windows Firewall COM API not available"); return Activator.CreateInstance(t); }
@@ -229,22 +179,6 @@ namespace PSTools
             }
             catch { }
             return l;
-        }
-        /// <summary>Replaces the rule's address set; an empty set removes the rule. Needs administrator.</summary>
-        public static void SetBlocked(IList<string> ips)
-        {
-            dynamic pol = Policy(); dynamic r = FindRule(pol);
-            if (ips == null || ips.Count == 0) { if (r != null) pol.Rules.Remove(RuleName); return; }
-            string joined = string.Join(",", ips);
-            if (r != null) { r.RemoteAddresses = joined; return; }
-            dynamic rule = Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule"));
-            rule.Name = RuleName; rule.Description = "Outbound block list managed by Block-Hosts / PowerTower";
-            rule.Direction = 2;            // NET_FW_RULE_DIR_OUT
-            rule.Action = 0;               // NET_FW_ACTION_BLOCK
-            rule.Protocol = 256;           // any
-            rule.Profiles = 0x7FFFFFFF;    // all
-            rule.RemoteAddresses = joined; rule.Enabled = true;
-            pol.Rules.Add(rule);
         }
     }
 

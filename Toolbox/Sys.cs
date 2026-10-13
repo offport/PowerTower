@@ -1,4 +1,4 @@
-// System engines: the process sampler, the storage scanner, and the deleted-files finder (USN journal,
+﻿// System engines: the process sampler, the storage scanner, and the deleted-files finder (USN journal,
 // path resolver, shadow copies, the exFAT directory-table reader, Recycle Bin pairing, recovery).
 // Ported from the scripts in the folders beside this one. Pure logic, no UI.
 using System;
@@ -24,7 +24,15 @@ namespace PSTools
             return b.ToString("N0") + " B";
         }
         public static string Secs(double s) { if (s >= 3600) return (s / 3600).ToString("N1") + " h"; if (s >= 60) return (s / 60).ToString("N1") + " m"; return s.ToString("N1") + " s"; }
-        public static string CsvQ(string s) { if (s == null) return ""; return (s.IndexOfAny(new char[] { ',', '"', '\n', '\r' }) >= 0) ? "\"" + s.Replace("\"", "\"\"") + "\"" : s; }
+        public static string CsvQ(string s) { if (s == null) return ""; double num; if (s.Length > 0 && "=+-@\t\r".IndexOf(s[0]) >= 0 && !double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out num)) s = "'" + s; /* spreadsheet formula injection: =cmd, +x, -x, @SUM; real numbers (-5) stay as they are */ return (s.IndexOfAny(new char[] { ',', '"', '\n', '\r' }) >= 0) ? "\"" + s.Replace("\"", "\"\"") + "\"" : s; }
+        /// <summary>A one-line sparkline of the last `width` values, in block characters.</summary>
+        public static string Spark(List<double> h, int width)
+        {
+            if (h == null || h.Count == 0) return ""; string blocks = "▁▂▃▄▅▆▇█"; double max = 0; int start = Math.Max(0, h.Count - width);
+            for (int i = start; i < h.Count; i++) if (h[i] > max) max = h[i];
+            StringBuilder sb = new StringBuilder(); for (int i = start; i < h.Count; i++) { double v = h[i]; sb.Append(max <= 0 || v <= 0 ? '▁' : blocks[Math.Min(7, (int)Math.Floor(v / max * 7.999))]); }
+            return sb.ToString();
+        }
     }
 
     // ───────────────────────────── process sampler ─────────────────────────────

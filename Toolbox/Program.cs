@@ -30,6 +30,7 @@ namespace PSTools
             string tool = "", selfTest = null, shots = null, theme = null;
             for (int i = 0; i < args.Length - 1; i++) { if (args[i] == "--tool") tool = args[i + 1]; if (args[i] == "--selftest") selfTest = args[i + 1]; if (args[i] == "--shots") shots = args[i + 1]; if (args[i] == "--theme") theme = args[i + 1]; }
             foreach (string a in args) if (a == "--demo") DemoMode = true;
+            if (shots != null) DemoMode = true;   // --shots only makes sense on the fabricated demo data (without it the run hung for minutes and wrote nothing)
             Settings pre = new Settings(Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "settings.ini")); Theme.Apply(theme ?? pre.Get("theme", Theme.Names[0]));
             List<ToolPanel> tools = new List<ToolPanel>();
             tools.Add(new ReconPanel()); tools.Add(new BlockerPanel()); tools.Add(new ReachPanel()); tools.Add(new ConnPanel()); tools.Add(new NetMapPanel()); tools.Add(new FirewallPanel()); tools.Add(new HogsPanel()); tools.Add(new DiskPanel()); tools.Add(new DeletedPanel()); tools.Add(new FileExplorerPanel()); tools.Add(new FindPanel()); tools.Add(new DupesPanel()); tools.Add(new VulnPanel()); tools.Add(new SoftwarePanel()); tools.Add(new AutorunsPanel()); tools.Add(new EventsPanel()); tools.Add(new ChecklistPanel()); tools.Add(new SecretsPanel()); tools.Add(new CredsPanel()); tools.Add(new BrowserPanel()); tools.Add(new MapPanel()); tools.Add(new AboutPanel());

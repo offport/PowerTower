@@ -13,8 +13,8 @@ namespace PSTools
 {
     public class BrowserPanel : ToolPanel
     {
-        public override string Title { get { return "Browsing Data"; } }
-        public override string Blurb { get { return "History, downloads, searches and saved passwords from every browser on this machine — Chrome, Edge, Brave and Firefox — read straight from their databases (including the Microsoft Store build of Firefox). The Domains view ranks every site by visits. Passwords stay masked until you reveal them."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
 
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly StepStrip steps = new StepStrip();
         readonly Button bHist, bDomains, bDown, bSearch, bPass, bReveal, bRefresh; readonly ComboBox cProfile, cMax; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); readonly Label lProfile;
@@ -36,9 +36,9 @@ namespace PSTools
             bDown = Theme.Btn("Downloads", false); bDown.Click += delegate { SetMode("downloads"); };
             bSearch = Theme.Btn("Searches", false); bSearch.Click += delegate { SetMode("searches"); };
             bPass = Theme.Btn("Passwords", false); bPass.Click += delegate { SetMode("passwords"); };
-            lProfile = Theme.Lbl("browser", Theme.Dim, Theme.UI); cProfile = Theme.Combo(200, "all browsers"); cProfile.SelectedIndexChanged += delegate { if (loaded) Load(false); };
+            lProfile = Theme.Lbl("browser", Theme.Dim, Theme.UI); cProfile = Theme.Combo(200, "all browsers"); cProfile.SelectedIndexChanged += delegate { if (loaded) LoadData(false); };
             Label lm = Theme.Lbl("max", Theme.Dim, Theme.UI); cMax = Theme.Combo(100, "1,000", "5,000", "20,000", "all"); cMax.SelectedIndex = 1;
-            bRefresh = Theme.Btn("Refresh", false); bRefresh.Click += delegate { Load(false); };
+            bRefresh = Theme.Btn("Refresh", false); bRefresh.Click += delegate { LoadData(false); };
             bReveal = Theme.Btn("Reveal passwords…", false); bReveal.Click += delegate { Reveal(); }; bReveal.Visible = false;
             foreach (Control c in new Control[] { bHist, bDomains, bDown, bSearch, bPass, lProfile, cProfile, lm, cMax, bRefresh, bReveal, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
@@ -60,75 +60,15 @@ namespace PSTools
         {
             mode = m;
             foreach (Button b in new Button[] { bHist, bDomains, bDown, bSearch, bPass }) { bool on = (b == bHist && m == "history") || (b == bDomains && m == "domains") || (b == bDown && m == "downloads") || (b == bSearch && m == "searches") || (b == bPass && m == "passwords"); b.BackColor = on ? Theme.Panel3 : Theme.Panel2; b.ForeColor = on ? Theme.Teal : Theme.Ink; b.FlatAppearance.BorderColor = on ? Theme.Teal : Theme.Line; }
-            bReveal.Visible = m == "passwords"; view.ExportName = "browsing-" + m;
-            if (m == "history") { view.SetColumns(HistoryCols()); view.RowColor = delegate (object o) { return ((VisitRow)o).Secure ? Theme.Ink : Theme.Amber; }; view.TreePath = delegate (object o) { VisitRow v = (VisitRow)o; return new string[] { v.Domain.Length > 0 ? v.Domain : "(local)", v.Title.Length > 0 ? v.Title : v.Url }; }; }
-            else if (m == "downloads") { view.SetColumns(DownloadCols()); view.RowColor = delegate (object o) { return Theme.Ink; }; view.TreePath = delegate (object o) { VisitRow v = (VisitRow)o; return new string[] { v.Domain.Length > 0 ? v.Domain : "(unknown)", v.Title }; }; }
-            else if (m == "searches") { view.SetColumns(SearchCols()); view.RowColor = delegate (object o) { return Theme.Ink; }; view.TreePath = delegate (object o) { VisitRow v = (VisitRow)o; return new string[] { v.Browser, v.Term }; }; }
-            else if (m == "domains") { view.SetColumns(DomainCols()); view.RowColor = delegate (object o) { return Theme.Ink; }; view.TreePath = delegate (object o) { DomainStat d = (DomainStat)o; string first = d.Domain.Length > 0 ? char.ToUpper(d.Domain[0]).ToString() : "#"; return new string[] { first, d.Domain }; }; }
-            else { view.SetColumns(PasswordCols()); view.RowColor = delegate (object o) { LoginRow l = (LoginRow)o; return l.Weak ? Theme.Amber : l.Url.StartsWith("http:", StringComparison.OrdinalIgnoreCase) ? Theme.Amber : Theme.Ink; }; view.TreePath = delegate (object o) { LoginRow l = (LoginRow)o; return new string[] { l.Domain.Length > 0 ? l.Domain : l.Url, l.User }; }; }
-            if (loaded) Load(revealed && m == "passwords");
+            bReveal.Visible = m == "passwords";
+            if (m == "history") view.Apply(Columns.BrowserHistory());
+            else if (m == "downloads") view.Apply(Columns.BrowserDownloads());
+            else if (m == "searches") view.Apply(Columns.BrowserSearches());
+            else if (m == "domains") view.Apply(Columns.BrowserDomains(domainStats));
+            else view.Apply(Columns.BrowserPasswords(delegate { return revealed; }));
+            if (loaded) LoadData(revealed && m == "passwords");
         }
 
-        List<Col> DomainCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("rank", "#", 46, delegate (object o) { return domainStats.IndexOf((DomainStat)o) + 1; }).Num(delegate (object o) { return (domainStats.IndexOf((DomainStat)o) + 1).ToString(); }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("domain", "Site", 300, delegate (object o) { return ((DomainStat)o).Domain; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("visits", "Visits", 90, delegate (object o) { return ((DomainStat)o).Visits; }).Num(delegate (object o) { return ((DomainStat)o).Visits.ToString("N0"); }));
-            c.Add(new Col("pages", "Pages", 80, delegate (object o) { return ((DomainStat)o).Pages; }).Num(delegate (object o) { return ((DomainStat)o).Pages.ToString("N0"); }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("bar", "Share", 160, delegate (object o) { return ((DomainStat)o).Visits; }).Num(delegate (object o) { long mx = domainStats.Count > 0 ? domainStats[0].Visits : 1; if (mx < 1) mx = 1; int w = (int)Math.Round(20.0 * ((DomainStat)o).Visits / mx); return new string('▮', Math.Max(((DomainStat)o).Visits > 0 ? 1 : 0, w)); }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("last", "Last visit", 110, delegate (object o) { return ((DomainStat)o).Last; }).Num(delegate (object o) { return ((DomainStat)o).LastText; }));
-            c.Add(new Col("first", "First visit", 110, delegate (object o) { return ((DomainStat)o).First == DateTime.MaxValue ? DateTime.MinValue : ((DomainStat)o).First; }).Num(delegate (object o) { return ((DomainStat)o).FirstText; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("browsers", "Browsers", 150, delegate (object o) { return ((DomainStat)o).BrowsersText; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> HistoryCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("when", "Last visit", 150, delegate (object o) { return ((VisitRow)o).When; }).Num(delegate (object o) { return ((VisitRow)o).WhenText; }));
-            c.Add(new Col("visits", "Visits", 62, delegate (object o) { return ((VisitRow)o).VisitCount; }).Num(delegate (object o) { return ((VisitRow)o).VisitCount.ToString(); }));
-            c.Add(new Col("title", "Title", 300, delegate (object o) { return ((VisitRow)o).Title; }));
-            c.Add(new Col("domain", "Site", 190, delegate (object o) { return ((VisitRow)o).Domain; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("url", "URL", 420, delegate (object o) { return ((VisitRow)o).Url; }).Colour(delegate (object o) { return ((VisitRow)o).Secure ? Theme.Dim : Theme.Amber; }));
-            c.Add(new Col("browser", "Browser", 120, delegate (object o) { return ((VisitRow)o).Browser + (((VisitRow)o).Profile.Length > 0 && ((VisitRow)o).Profile != "Default" ? " · " + ((VisitRow)o).Profile : ""); }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> DownloadCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("when", "When", 150, delegate (object o) { return ((VisitRow)o).When; }).Num(delegate (object o) { return ((VisitRow)o).WhenText; }));
-            c.Add(new Col("file", "File", 300, delegate (object o) { return ((VisitRow)o).Title; }));
-            c.Add(new Col("size", "Size", 100, delegate (object o) { return ((VisitRow)o).Bytes; }).Num(delegate (object o) { long b = ((VisitRow)o).Bytes; return b > 0 ? Fmt.Bytes(b) : ""; }));
-            c.Add(new Col("state", "State", 100, delegate (object o) { return ((VisitRow)o).State; }).Colour(delegate (object o) { string s = ((VisitRow)o).State; return s == "complete" ? Theme.Green : s == "interrupted" || s == "cancelled" ? Theme.Rose : Theme.Dim; }));
-            c.Add(new Col("domain", "From site", 180, delegate (object o) { return ((VisitRow)o).Domain; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("url", "Source URL", 380, delegate (object o) { return ((VisitRow)o).Url; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("path", "Saved to", 360, delegate (object o) { return ((VisitRow)o).File; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("browser", "Browser", 110, delegate (object o) { return ((VisitRow)o).Browser; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> SearchCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("when", "When", 150, delegate (object o) { return ((VisitRow)o).When; }).Num(delegate (object o) { return ((VisitRow)o).WhenText; }));
-            c.Add(new Col("term", "Search term", 340, delegate (object o) { return ((VisitRow)o).Term; }));
-            c.Add(new Col("domain", "Engine / site", 200, delegate (object o) { return ((VisitRow)o).Domain; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("url", "URL", 420, delegate (object o) { return ((VisitRow)o).Url; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("browser", "Browser", 120, delegate (object o) { return ((VisitRow)o).Browser; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> PasswordCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("site", "Site", 220, delegate (object o) { LoginRow l = (LoginRow)o; return l.Domain.Length > 0 ? l.Domain : l.Url; }));
-            c.Add(new Col("user", "Username", 240, delegate (object o) { return ((LoginRow)o).User; }));
-            c.Add(new Col("pass", "Password", 220, delegate (object o) { LoginRow l = (LoginRow)o; return !l.HasPassword ? "(none)" : revealed ? (l.Password.Length > 0 ? l.Password : "—") : "••••••••"; }).Colour(delegate (object o) { return revealed ? Theme.Amber : Theme.Faint; }));
-            c.Add(new Col("weak", "Weak", 60, delegate (object o) { return ((LoginRow)o).Weak ? "weak" : ""; }).Colour(delegate (object o) { return Theme.Rose; }));
-            c.Add(new Col("when", "Saved", 140, delegate (object o) { return ((LoginRow)o).When; }).Num(delegate (object o) { return ((LoginRow)o).WhenText; }));
-            c.Add(new Col("note", "Note", 300, delegate (object o) { return ((LoginRow)o).Note; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("url", "URL", 360, delegate (object o) { return ((LoginRow)o).Url; }).Colour(delegate (object o) { return ((LoginRow)o).Url.StartsWith("http:", StringComparison.OrdinalIgnoreCase) ? Theme.Amber : Theme.Dim; }));
-            c.Add(new Col("browser", "Browser", 110, delegate (object o) { return ((LoginRow)o).Browser; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
 
         public override void OnShown() { if (loaded) return; loaded = true; DiscoverAndLoad(); }
         void Ui(Action a) { try { Host.BeginInvoke(a); } catch { } }
@@ -143,7 +83,7 @@ namespace PSTools
                 {
                     profiles.Clear(); profiles.AddRange(ps); cProfile.Items.Clear(); cProfile.Items.Add("all browsers"); foreach (BrowserProfile p in ps) cProfile.Items.Add(p.Label); cProfile.SelectedIndex = 0;
                     if (ps.Count == 0) { status.Text = "no supported browsers found"; sBrowsers.Set("0", "found", Theme.Dim); return; }
-                    SetMode("history"); Load(false);
+                    SetMode("history"); LoadData(false);
                 });
             });
             worker.IsBackground = true; worker.Start();
@@ -156,7 +96,7 @@ namespace PSTools
         }
         int MaxRows() { switch (cMax.SelectedIndex) { case 0: return 1000; case 1: return 5000; case 2: return 20000; default: return int.MaxValue; } }
 
-        void Load(bool reveal)
+        void LoadData(bool reveal)
         {
             if (busy) { if (reveal) pendingReveal = true; Host.Toast("Still reading — one moment.", false); return; }
             List<BrowserProfile> targets = Selected(); if (targets.Count == 0) { status.Text = "no browser selected"; return; }
@@ -189,7 +129,7 @@ namespace PSTools
                     Cards(); steps.Set("Read " + m, "done", null); steps.End("done");
                     int n = m == "history" ? hist.Count : m == "domains" ? domainStats.Count : m == "downloads" ? downs.Count : m == "searches" ? searches.Count : logins.Count;
                     status.Text = "done · " + n + " " + (m == "domains" ? "unique site(s)" : m + " record(s)") + (errs.Count > 0 ? " · " + errs.Count + " source(s) skipped" : "") + (m == "passwords" && reveal ? " · revealed" : "");
-                    busy = false; if (pendingReveal && m == "passwords" && !revealed) { pendingReveal = false; Load(true); }
+                    busy = false; if (pendingReveal && m == "passwords" && !revealed) { pendingReveal = false; LoadData(true); }
                     else pendingReveal = false;
                 });
             });
@@ -202,7 +142,7 @@ namespace PSTools
                 "This decrypts and shows the passwords this browser saved, in clear text.\n\n" +
                 "They are decrypted locally with your own Windows account — nothing leaves this machine — but make sure nobody is looking over your shoulder.\n\n" +
                 "Note: passwords protected by newer app-bound encryption, or a Firefox master password, may not be recoverable and will show a note instead. Continue?")) return;
-            Load(true);
+            LoadData(true);
         }
 
         void Cards()

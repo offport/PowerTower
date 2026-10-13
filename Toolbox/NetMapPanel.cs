@@ -14,8 +14,8 @@ namespace PSTools
 {
     public class NetMapPanel : ToolPanel
     {
-        public override string Title { get { return "Network Map"; } }
-        public override string Blurb { get { return "This machine's live network connections on a world map. Every connection to a public address is geolocated and drawn as an animated arc — outbound and inbound in different colours. Hover a country to light it up, hover a connection for its ports and protocols."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
 
         readonly WorldFlowMap map = new WorldFlowMap(); readonly ConnSidebar side = new ConnSidebar(); readonly NameCache names = new NameCache();
         readonly Button bStart, bGeo; readonly CheckBox cUdp; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);

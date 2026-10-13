@@ -12,9 +12,9 @@ namespace PSTools
 {
     public class EventsPanel : ToolPanel
     {
-        public override string Title { get { return "Event Log Triage"; } }
-        public override string Blurb { get { return "The event-log records that matter for an incident: failed and successful logons, new services and scheduled tasks, PowerShell activity, Defender detections, account changes and cleared logs. Pick a time range and hunt across every column."; } }
-        public override bool NeedsAdmin { get { return true; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
+        public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
 
         readonly DataView view; readonly StepStrip steps = new StepStrip(); readonly SelectionBar sel = new SelectionBar();
         readonly Button bScan, bCancel; readonly ComboBox cRange, cMax; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
@@ -35,9 +35,7 @@ namespace PSTools
             foreach (Control c in new Control[] { bScan, bCancel, lr, cRange, lm, cMax, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sTotal, sHigh, sFailed, sCats, sSpan }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
-            view = NewView("events"); view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { return RiskColor(((EventRow)o).Risk); };
-            view.TreePath = delegate (object o) { EventRow e = (EventRow)o; return new string[] { e.Category, e.When }; };
+            view = NewView("events"); view.Apply(Columns.Events());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "event"); };
             view.Filter = FilterRow;
             lCat = Theme.Lbl("category", Theme.Dim, Theme.UI); cCat = Theme.Combo(200, "all categories"); cRisky = Theme.Toggle("risky only", false);
@@ -48,21 +46,6 @@ namespace PSTools
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("time", "When", 150, delegate (object o) { return ((EventRow)o).Time; }).Num(delegate (object o) { return ((EventRow)o).When; }));
-            c.Add(new Col("risk", "Risk", 62, delegate (object o) { EventRow e = (EventRow)o; return e.Risk == "high" ? 0 : e.Risk == "medium" ? 1 : 2; }).Num(delegate (object o) { return ((EventRow)o).Risk; }).Colour(delegate (object o) { return RiskColor(((EventRow)o).Risk); }));
-            c.Add(new Col("cat", "Category", 190, delegate (object o) { return ((EventRow)o).Category; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("id", "Event", 62, delegate (object o) { return ((EventRow)o).Id; }).Num(delegate (object o) { return ((EventRow)o).Id.ToString(); }));
-            c.Add(new Col("who", "Account", 170, delegate (object o) { return ((EventRow)o).Who; }));
-            c.Add(new Col("detail", "Detail", 520, delegate (object o) { return ((EventRow)o).Detail; }));
-            c.Add(new Col("level", "Level", 90, delegate (object o) { return ((EventRow)o).Level; }).Colour(delegate (object o) { EventRow e = (EventRow)o; return e.Level == "error" || e.Level == "critical" ? Theme.Rose : e.Level == "warning" ? Theme.Amber : Theme.Dim; }));
-            c.Add(new Col("src", "Source", 220, delegate (object o) { return ((EventRow)o).Source; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("log", "Log", 200, delegate (object o) { return ((EventRow)o).Log; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        static Color RiskColor(string r) { return r == "high" ? Theme.Rose : r == "medium" ? Theme.Amber : Theme.Ink; }
 
         bool FilterRow(object o)
         {

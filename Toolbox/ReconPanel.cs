@@ -13,9 +13,9 @@ namespace PSTools
 {
     public class ReconPanel : ToolPanel
     {
-        public override string Title { get { return "System Recon & Audit"; } }
-        public override string Blurb { get { return "A read-only security enumeration of this machine: system, users and groups, network, security posture, persistence surface, running processes and recent security events. Risky settings are flagged. Download the whole report as Markdown, JSON or PDF. For authorized use only."; } }
-        public override bool NeedsAdmin { get { return true; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
+        public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar();
         readonly Button bRun, bCancel, bMd, bJson, bPdf, bLog; readonly CheckBox cEvents, cRiskOnly; readonly ComboBox cSection; readonly Label lSection, status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
         readonly Stat sOs = new Stat("OS"), sElev = new Stat("elevated"), sSecs = new Stat("sections"), sFacts = new Stat("facts"), sReview = new Stat("to review"), sRisk = new Stat("risks"), sProc = new Stat("processes");
@@ -37,10 +37,7 @@ namespace PSTools
             foreach (Stat s in new Stat[] { sOs, sElev, sSecs, sFacts, sReview, sRisk, sProc }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, s == sOs ? 24 : s == sElev ? 14 : 12.4f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
             // rows
             view = NewView("recon-audit");
-            view.SetColumns(Cols());
-            view.TreePath = delegate (object o) { ReconItem i = (ReconItem)o; return new string[] { i.Section, i.Group.Length > 0 ? i.Group : "(general)" }; };
-            // tint only the rows that need attention; good/normal rows stay in the default ink (the Flag chip carries the colour)
-            view.RowColor = delegate (object o) { string r = ((ReconItem)o).Risk; return r == "bad" ? Theme.Rose : r == "warn" ? Theme.Amber : Theme.Ink; };
+            view.Apply(Columns.Recon());
             lSection = Theme.Lbl("section", Theme.Dim, Theme.UI); cSection = Theme.Combo(230, "all sections"); cRiskOnly = Theme.Toggle("flagged only", false);
             foreach (Control c in new Control[] { lSection, cSection, cRiskOnly }) view.Extra.Controls.Add(c);
             cSection.SelectedIndexChanged += delegate { view.Refilter(); }; cRiskOnly.CheckedChanged += delegate { view.Refilter(); };
@@ -56,18 +53,6 @@ namespace PSTools
             if (loaded) return; loaded = true; scan = new ReconScan(); scan.Report.Elevated = Host.IsElevated; Cards(); status.Text = "not run yet · Run audit to enumerate this machine";
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("section", "Section", 180, delegate (object o) { return ((ReconItem)o).Section; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("group", "Category", 210, delegate (object o) { return ((ReconItem)o).Group; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("name", "Item", 240, delegate (object o) { return ((ReconItem)o).Name; }));
-            c.Add(new Col("value", "Value", 420, delegate (object o) { return ((ReconItem)o).Value; }));
-            c.Add(new Col("risk", "Flag", 74, delegate (object o) { return ((ReconItem)o).RiskText; }).Colour(delegate (object o) { return RiskColor(((ReconItem)o).Risk); }));
-            c.Add(new Col("note", "Note", 460, delegate (object o) { return ((ReconItem)o).Note; }).Colour(delegate (object o) { ReconItem i = (ReconItem)o; return i.Risk == "bad" ? Theme.Rose : i.Risk == "warn" ? Theme.Amber : Theme.Dim; }));
-            return c;
-        }
-        static Color RiskColor(string risk) { return risk == "bad" ? Theme.Rose : risk == "warn" ? Theme.Amber : risk == "good" ? Theme.Green : Theme.Ink; }
         static string ExtractPath(string v) { if (string.IsNullOrEmpty(v)) return null; int i = v.IndexOfAny(new char[] { 'C', 'c' }); if (i >= 0 && i + 2 < v.Length && v[i + 1] == ':' && v[i + 2] == '\\') { string p = v.Substring(i).Split(' ')[0].Trim('"'); return p; } return null; }
 
         void Ui(Action a) { try { Host.BeginInvoke(a); } catch { } }

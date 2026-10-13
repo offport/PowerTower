@@ -13,8 +13,8 @@ namespace PSTools
 {
     public class DupesPanel : ToolPanel
     {
-        public override string Title { get { return "Duplicate Finder"; } }
-        public override string Blurb { get { return "Find files whose contents are identical — grouped, with the space each group wastes. Compares by size first, then hashes only the files that could match, so it is fast. Keep one copy and send the rest to the Recycle Bin."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
 
         readonly DataView view; readonly StepStrip steps = new StepStrip(); readonly SelectionBar sel = new SelectionBar();
         readonly Button bScan, bCancel, bPick; readonly TextBox tRoot; readonly ComboBox cMin; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
@@ -32,9 +32,7 @@ namespace PSTools
             foreach (Control c in new Control[] { lf, tRoot, bPick, bScan, bCancel, lm, cMin, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sGroups, sDupes, sWasted, sSeen, sHashed }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
-            view = NewView("duplicates"); view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { return ((DupeFile)o).Keep ? Theme.Green : Theme.Ink; };
-            view.TreePath = delegate (object o) { DupeFile d = (DupeFile)o; return new string[] { Fmt.Bytes(d.Size) + " · " + d.Group, d.Name }; };
+            view = NewView("duplicates"); view.Apply(Columns.Duplicates());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "file"); };
             view.Activated += delegate (object o) { Dialogs.OpenInExplorer(Path.GetDirectoryName(((DupeFile)o).Path)); };
             sel.Add("Select all but newest per group", true, delegate { SelectExtras(); });
@@ -45,18 +43,6 @@ namespace PSTools
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("keep", "Copy", 74, delegate (object o) { return ((DupeFile)o).Keep ? "keep" : "extra"; }).Colour(delegate (object o) { return ((DupeFile)o).Keep ? Theme.Green : Theme.Amber; }));
-            c.Add(new Col("name", "Name", 260, delegate (object o) { return ((DupeFile)o).Name; }));
-            c.Add(new Col("size", "Size", 100, delegate (object o) { return ((DupeFile)o).Size; }).Num(delegate (object o) { return Fmt.Bytes(((DupeFile)o).Size); }));
-            c.Add(new Col("group", "Group", 90, delegate (object o) { return ((DupeFile)o).Group; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("mod", "Modified", 130, delegate (object o) { return ((DupeFile)o).Modified; }));
-            c.Add(new Col("where", "Location", 100, delegate (object o) { return ((DupeFile)o).Where; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("dir", "Folder", 460, delegate (object o) { return ((DupeFile)o).Dir; }).Colour(delegate (object o) { return Theme.Dim; }));
-            return c;
-        }
 
         public override void OnShown() { if (loaded) return; loaded = true; if (tRoot.Text.Length == 0) tRoot.Text = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile); }
         void Ui(Action a) { try { Host.BeginInvoke(a); } catch { } }

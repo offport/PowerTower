@@ -28,8 +28,12 @@ namespace PSTools
     {
         public static object Parse(string s) { int i = 0; object v = Value(s, ref i); Ws(s, ref i); if (i != s.Length) throw new FormatException("trailing characters at " + i); return v; }
         static void Ws(string s, ref int i) { while (i < s.Length) { char c = s[i]; if (c == ' ' || c == '\t' || c == '\r' || c == '\n') i++; else break; } }
-        static object Value(string s, ref int i)
+        /// <summary>Deepest nesting Parse (and JsonWrite) accept. Bundles nest under 10; past this, recursion on hostile input would end in an uncatchable StackOverflow (PT-23).</summary>
+        public const int MaxDepth = 200;
+        static object Value(string s, ref int i) { return Value(s, ref i, 0); }
+        static object Value(string s, ref int i, int depth)
         {
+            if (depth > MaxDepth) throw new FormatException("nesting too deep (more than " + MaxDepth + " levels) at " + i);
             Ws(s, ref i); if (i >= s.Length) throw new FormatException("unexpected end of JSON");
             char c = s[i];
             if (c == '{')
@@ -39,7 +43,7 @@ namespace PSTools
                 {
                     Ws(s, ref i); if (i >= s.Length || s[i] != '"') throw new FormatException("expected a key at " + i);
                     string k = Str(s, ref i); Ws(s, ref i); if (i >= s.Length || s[i] != ':') throw new FormatException("expected ':' at " + i); i++;
-                    d[k] = Value(s, ref i); Ws(s, ref i);
+                    d[k] = Value(s, ref i, depth + 1); Ws(s, ref i);
                     if (i < s.Length && s[i] == ',') { i++; continue; }
                     if (i < s.Length && s[i] == '}') { i++; return d; }
                     throw new FormatException("expected ',' or '}' at " + i);
@@ -50,7 +54,7 @@ namespace PSTools
                 i++; List<object> l = new List<object>(); Ws(s, ref i); if (i < s.Length && s[i] == ']') { i++; return l; }
                 while (true)
                 {
-                    l.Add(Value(s, ref i)); Ws(s, ref i);
+                    l.Add(Value(s, ref i, depth + 1)); Ws(s, ref i);
                     if (i < s.Length && s[i] == ',') { i++; continue; }
                     if (i < s.Length && s[i] == ']') { i++; return l; }
                     throw new FormatException("expected ',' or ']' at " + i);
@@ -86,8 +90,8 @@ namespace PSTools
         }
         public static Dictionary<string, object> Obj(object o) { return o as Dictionary<string, object>; }
         public static List<object> Arr(object o) { return (o as List<object>) ?? new List<object>(); }
-        public static string S(object o) { if (o == null) return null; if (o is string) return (string)o; if (o is double) return ((double)o).ToString(CultureInfo.InvariantCulture); if (o is bool) return (bool)o ? "true" : "false"; return null; }
-        public static double? N(object o) { if (o is double) return (double)o; string s = o as string; if (s != null) { double d; if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return d; } return null; }
+        public static string S(object o) { if (o == null) return null; if (o is string) return (string)o; if (o is double) return ((double)o).ToString(CultureInfo.InvariantCulture); if (o is int || o is long || o is float || o is decimal || o is short || o is byte) return Convert.ToString(o, CultureInfo.InvariantCulture); if (o is bool) return (bool)o ? "true" : "false"; return null; }
+        public static double? N(object o) { if (o is double) return (double)o; if (o is int || o is long || o is float || o is decimal || o is short || o is byte) return Convert.ToDouble(o, CultureInfo.InvariantCulture);   /* trees built in-process carry boxed ints, not the doubles the parser makes */ string s = o as string; if (s != null) { double d; if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return d; } return null; }
         public static object Get(object o, params string[] path) { foreach (string p in path) { Dictionary<string, object> d = o as Dictionary<string, object>; if (d == null || !d.TryGetValue(p, out o)) return null; } return o; }
         public static string GetS(object o, params string[] path) { return S(Get(o, path)); }
         public static string Quote(string s) { if (s == null) return "null"; StringBuilder sb = new StringBuilder("\""); foreach (char c in s) { if (c == '"') sb.Append("\\\""); else if (c == '\\') sb.Append("\\\\"); else if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4")); else sb.Append(c); } return sb.Append('"').ToString(); }
@@ -153,7 +157,7 @@ namespace PSTools
     // ───────────────────────────── inventory ─────────────────────────────
     public class OsInfo
     {
-        public string ProductName = "", Edition = "", DisplayVersion = "", Arch = "", Host = ""; public int Major, Minor, Build, Ubr;
+        public string ProductName = "", Edition = "", DisplayVersion = "", Arch = "", Host = ""; public int Major, Minor, Build, Ubr; public DateTime? Installed;   // when this build was installed (registry InstallDate)
         public string Family { get { return Major + "." + Minor + "." + Build; } }
         /// <summary>major.minor.build.UBR - the one string the resolvers compare against FixedBuild.</summary>
         public string FullBuild { get { return Major + "." + Minor + "." + Build + "." + Ubr; } }
@@ -208,6 +212,7 @@ namespace PSTools
                 else { string[] cv = VS(k, "CurrentVersion").Split('.'); int.TryParse(cv[0], out o.Major); if (cv.Length > 1) int.TryParse(cv[1], out o.Minor); if (o.Major == 0) o.Major = 10; }
                 // "Windows 10 Pro" is what the registry says on Windows 11 too - build 22000+ is Windows 11
                 if (o.Build >= 22000 && o.ProductName.StartsWith("Windows 10")) o.ProductName = "Windows 11" + o.ProductName.Substring(10);
+                object inst = V(k, "InstallDate"); if (inst != null) { try { long secs = Convert.ToInt64(inst, CultureInfo.InvariantCulture); if (secs > 0) o.Installed = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(secs).ToLocalTime(); } catch { } }
             }
             return o;
         }
@@ -727,13 +732,40 @@ namespace PSTools
     /// <summary>Runs inventory, feeds and resolvers in order, reporting progress; results are read by the UI after each phase.</summary>
     public class VulnScan
     {
-        public bool DoWua = true, DoMsrc = true, DoNvd = true, DoKev = true, DoEpss = true; public int Months = 3, HistoryLimit = 1000; public string NvdApiKey = ""; public FeedCache Cache; public int NvdLimit = int.MaxValue;
+        public bool DoWua = true, DoMsrc = true, DoNvd = true, DoKev = true, DoEpss = true; public int Months = 3, HistoryLimit = 1000; public string NvdApiKey = ""; public FeedCache Cache; public int NvdLimit = int.MaxValue;   // Months: the fewest MSRC releases to check; Run() widens it to the host's patch level (MsrcWindow)
         public OsInfo Os; public RebootInfo Reboot = new RebootInfo(); public readonly List<Hotfix> Hotfixes = new List<Hotfix>(); public readonly List<Software> Software = new List<Software>(); public readonly List<MissingUpdate> Missing = new List<MissingUpdate>(); public readonly List<Finding> Findings = new List<Finding>();
         public readonly HashSet<string> KnownKbs = new HashSet<string>(); public readonly List<string> Log = new List<string>(), Errors = new List<string>(), Releases = new List<string>(); public Dictionary<string, KevEntry> KevCatalog = new Dictionary<string, KevEntry>();
         public event Action<string> Progress; public event Action Phase; public event Action Finished; public volatile bool Cancel; public bool Running; public DateTime StartedAt, FinishedAt; public string Stage = "";
         /// <summary>(step label, state, note) - pending · running · done · failed · skipped - for the progress strip.</summary>
         public event Action<string, string, string> Step; public volatile float Fraction = -1;
         public static readonly string[] StepLabels = { "Inventory", "Windows Update", "Microsoft CVEs", "Third-party (NVD)", "KEV", "EPSS" };
+        /// <summary>The most monthly MSRC releases a scan will ever fetch, however stale the host.</summary>
+        public const int MaxMonths = 36;
+        /// <summary>The date of the newest installed OS update - the host's patch level. QFE rows (OS servicing) win; failing those, successful Windows Update installations of Windows updates. Definitions, Defender platform, MSRT and driver rows never count: Windows Update keeps installing those on a host whose cumulative updates are months behind.</summary>
+        public static DateTime? NewestUpdateDate(IEnumerable<Hotfix> hotfixes)
+        {
+            DateTime? qfe = null, wu = null;
+            foreach (Hotfix h in hotfixes)
+            {
+                if (!h.InstalledOn.HasValue) continue;
+                if (h.Source == "QFE") { if (!qfe.HasValue || h.InstalledOn.Value > qfe.Value) qfe = h.InstalledOn; }
+                else if (h.Source == "WU history" && h.Description == "installation" && h.Result == "succeeded" && h.Kb.Length > 0 && IsWindowsServicing(h.Title)) { if (!wu.HasValue || h.InstalledOn.Value > wu.Value) wu = h.InstalledOn; }
+            }
+            return qfe.HasValue ? qfe : wu;
+        }
+        static bool IsWindowsServicing(string title)
+        {
+            string t = (title ?? "").ToLowerInvariant(); if (!t.Contains("windows")) return false;
+            foreach (string skip in new string[] { "security intelligence", "antivirus", "defender", "definition", "malicious software removal", "driver" }) if (t.Contains(skip)) return false;
+            return true;
+        }
+        /// <summary>How many monthly MSRC releases to check: the months since the newest installed update, plus one so the release that update came from is included - never fewer than the configured minimum, never more than MaxMonths. Without a dated update the OS install date stands in; without that, the cap: a host that cannot show its patch level gets the widest check, not the narrowest. A fixed 3 months made a host that was a year behind look clean, because its missing fixes were all in older releases.</summary>
+        public static int MsrcWindow(DateTime? newestUpdate, DateTime? osInstalled, DateTime now, int minimum)
+        {
+            DateTime? since = newestUpdate.HasValue ? newestUpdate : osInstalled;
+            int months = MaxMonths; if (since.HasValue) months = (now.Year - since.Value.Year) * 12 + (now.Month - since.Value.Month) + 1;
+            return Math.Max(Math.Max(1, minimum), Math.Min(MaxMonths, months));
+        }
         void StepTo(string label, string state, string note) { if (Step != null) Step(label, state, note); }
         readonly object sync = new object();
         void Say(string s) { Stage = s; lock (sync) Log.Add(DateTime.Now.ToString("HH:mm:ss") + "  " + s); if (Progress != null) Progress(s); }
@@ -776,10 +808,12 @@ namespace PSTools
                     StepTo("Microsoft CVEs", "running", null);
                     try
                     {
+                        DateTime? newest = NewestUpdateDate(HotfixSnapshot()); int window = MsrcWindow(newest, Os.Installed, DateTime.Now, Months);
+                        Say("newest installed update " + (newest.HasValue ? newest.Value.ToString("yyyy-MM-dd") : ("not dated" + (Os.Installed.HasValue ? ", OS installed " + Os.Installed.Value.ToString("yyyy-MM-dd") : ""))) + " → checking " + window + " MSRC release" + (window == 1 ? "" : "s") + " (at least " + Months + ", at most " + MaxMonths + ")");
                         string note; List<string> rel = Msrc.Releases(Cache, out note); Say("MSRC releases list " + note); List<MsrcRec> all = new List<MsrcRec>();
-                        for (int i = 0; i < Math.Min(Months, rel.Count) && !Cancel; i++)
+                        for (int i = 0; i < Math.Min(window, rel.Count) && !Cancel; i++)
                         {
-                            Fraction = (float)i / Math.Max(1, Math.Min(Months, rel.Count)); Say("MSRC " + rel[i] + " · fetching (about 10 MB the first time)…"); string body; try { body = Msrc.Fetch(rel[i], Cache, out note); } catch (Exception ex) { Fail("MSRC " + rel[i], ex); continue; }
+                            Fraction = (float)i / Math.Max(1, Math.Min(window, rel.Count)); Say("MSRC " + rel[i] + " · fetching (about 10 MB the first time)…"); string body; try { body = Msrc.Fetch(rel[i], Cache, out note); } catch (Exception ex) { Fail("MSRC " + rel[i], ex); continue; }
                             Say("MSRC " + rel[i] + " · " + note + " · parsing…"); List<MsrcRec> recs = Msrc.Parse(body, rel[i]); all.AddRange(recs); lock (sync) Releases.Add(rel[i]); Say("MSRC " + rel[i] + " · " + recs.Count.ToString("N0") + " remediation records");
                         }
                         Say("resolving Microsoft CVEs against build " + Os.FullBuild + " and " + KnownKbs.Count + " known KBs…");

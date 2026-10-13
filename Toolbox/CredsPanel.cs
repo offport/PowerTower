@@ -12,8 +12,8 @@ namespace PSTools
 {
     public class CredsPanel : ToolPanel
     {
-        public override string Title { get { return "Wi-Fi & Credentials"; } }
-        public override string Blurb { get { return "The secrets saved on this machine: Wi-Fi networks with their security type (weak ones flagged) and, when elevated, the stored key; plus the Windows Credential Manager vault. Revealing a Wi-Fi key or a stored secret is opt-in and confirmed."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
 
         readonly DataView view; readonly SelectionBar sel = new SelectionBar();
         readonly Button bWifi, bVault, bReveal; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
@@ -44,40 +44,16 @@ namespace PSTools
             mode = m;
             foreach (Button b in new Button[] { bWifi, bVault }) { bool on = (b == bWifi && m == "wifi") || (b == bVault && m == "vault"); b.BackColor = on ? Theme.Panel3 : Theme.Panel2; b.ForeColor = on ? Theme.Teal : Theme.Ink; b.FlatAppearance.BorderColor = on ? Theme.Teal : Theme.Line; }
             bReveal.Text = m == "wifi" ? "Reveal Wi-Fi keys…" : "Reveal stored secrets…";
-            view.ExportName = m == "wifi" ? "wifi-networks" : "credential-vault";
-            if (m == "wifi") { view.SetColumns(WifiCols()); view.RowColor = delegate (object o) { WifiProfile w = (WifiProfile)o; return w.Risk == "high" ? Theme.Rose : w.Risk == "medium" ? Theme.Amber : Theme.Ink; }; view.TreePath = delegate (object o) { return new string[] { ((WifiProfile)o).Security.Length > 0 ? ((WifiProfile)o).Security : "unknown", ((WifiProfile)o).Ssid }; }; view.SetItems(Boxed(wifi), false); }
-            else { view.SetColumns(VaultCols()); view.RowColor = delegate (object o) { return Theme.Ink; }; view.TreePath = delegate (object o) { return new string[] { ((VaultCred)o).Type, ((VaultCred)o).Target }; }; view.SetItems(Boxed(vault), false); }
+            if (m == "wifi") { view.Apply(Columns.Wifi(delegate { return revealed; })); view.SetItems(Boxed(wifi), false); }
+            else { view.Apply(Columns.Vault(delegate { return revealed; })); view.SetItems(Boxed(vault), false); }
             Cards();
         }
 
-        List<Col> WifiCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("ssid", "Network (SSID)", 240, delegate (object o) { return ((WifiProfile)o).Ssid; }));
-            c.Add(new Col("risk", "Security risk", 100, delegate (object o) { WifiProfile w = (WifiProfile)o; return w.Risk == "high" ? 0 : w.Risk == "medium" ? 1 : 2; }).Num(delegate (object o) { return ((WifiProfile)o).Risk; }).Colour(delegate (object o) { WifiProfile w = (WifiProfile)o; return w.Risk == "high" ? Theme.Rose : w.Risk == "medium" ? Theme.Amber : Theme.Green; }));
-            c.Add(new Col("sec", "Security", 200, delegate (object o) { return ((WifiProfile)o).Security; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("key", "Key", 220, delegate (object o) { WifiProfile w = (WifiProfile)o; return w.HasKey ? (revealed ? w.Key : "••••••••") : (revealed ? "(none stored)" : ""); }).Colour(delegate (object o) { return revealed ? Theme.Amber : Theme.Faint; }));
-            c.Add(new Col("auto", "Auto-connect", 100, delegate (object o) { return ((WifiProfile)o).AutoConnect ? "yes" : "no"; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("why", "Note", 240, delegate (object o) { return ((WifiProfile)o).RiskWhy; }).Colour(delegate (object o) { return Theme.Amber; }));
-            c.Add(new Col("scope", "Stored for", 110, delegate (object o) { return ((WifiProfile)o).Where; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> VaultCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("target", "Target", 320, delegate (object o) { return ((VaultCred)o).Target; }));
-            c.Add(new Col("user", "User", 200, delegate (object o) { return ((VaultCred)o).User; }));
-            c.Add(new Col("type", "Type", 160, delegate (object o) { return ((VaultCred)o).Type; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("secret", "Secret", 200, delegate (object o) { VaultCred v = (VaultCred)o; return v.HasSecret ? (revealed ? v.Preview : "••••••") : "(none)"; }).Colour(delegate (object o) { return revealed ? Theme.Amber : Theme.Faint; }));
-            c.Add(new Col("persist", "Persistence", 120, delegate (object o) { return ((VaultCred)o).Persist; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("when", "Last written", 140, delegate (object o) { return ((VaultCred)o).Written; }).Num(delegate (object o) { return ((VaultCred)o).When; }));
-            return c;
-        }
 
-        public override void OnShown() { if (loaded) return; loaded = true; SetMode("wifi"); Load(false); }
+        public override void OnShown() { if (loaded) return; loaded = true; SetMode("wifi"); LoadData(false); }
         void Ui(Action a) { try { Host.BeginInvoke(a); } catch { } }
 
-        void Load(bool reveal)
+        void LoadData(bool reveal)
         {
             if (busy) { pendingReveal = pendingReveal || reveal; Host.Toast("Still reading — it will " + (reveal ? "reveal" : "refresh") + " in a moment.", false); return; } busy = true; status.Text = (reveal ? "revealing" : "reading") + " saved " + (mode == "wifi" ? "Wi-Fi profiles…" : "credentials…");
             worker = new Thread(delegate ()
@@ -95,7 +71,7 @@ namespace PSTools
                     });
                 }
                 catch (Exception ex) { Ui(delegate { Host.Toast("credentials: " + ex.Message, true); }); }
-                finally { Ui(delegate { busy = false; if (pendingReveal && !revealed) { pendingReveal = false; Load(true); } else pendingReveal = false; }); }
+                finally { Ui(delegate { busy = false; if (pendingReveal && !revealed) { pendingReveal = false; LoadData(true); } else pendingReveal = false; }); }
             });
             worker.IsBackground = true; worker.Start();
         }
@@ -105,7 +81,7 @@ namespace PSTools
                 ? "This puts the saved Wi-Fi passwords on screen in clear text.\n\nMake sure nobody is looking over your shoulder. Continue?"
                 : "This puts a masked preview of the stored secrets on screen.\n\nOnly credentials your account can read are shown. Continue?";
             if (!Host.Confirm("Reveal saved secrets", msg)) return;
-            Load(true);
+            LoadData(true);
         }
         void Cards()
         {

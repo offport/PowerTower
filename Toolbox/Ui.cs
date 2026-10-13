@@ -107,6 +107,11 @@ namespace PSTools
             string t = (s ?? "").ToLowerInvariant();
             if (t == "critical") return Rose; if (t == "high" || t == "important") return Amber; if (t == "medium" || t == "moderate") return Blue; if (t == "low") return Dim; return Faint;
         }
+        /// <summary>The theme colour for a semantic tone (the shared column definitions speak in tones).</summary>
+        public static Color Of(Tone t)
+        {
+            switch (t) { case Tone.Dim: return Dim; case Tone.Faint: return Faint; case Tone.Accent: return Teal; case Tone.Good: return Green; case Tone.Warn: return Amber; case Tone.Bad: return Rose; case Tone.Info: return Blue; default: return Ink; }
+        }
         public static void DoubleBuffer(Control c) { try { typeof(Control).GetProperty("DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(c, true, null); } catch { } }
         public static Color StatusColor(string s)
         {
@@ -115,61 +120,6 @@ namespace PSTools
             if (t.StartsWith("unreach") || t == "invalid" || t == "no dns" || t == "overwritten" || t == "chain lost" || t == "error" || t.StartsWith("not a valid") || t == "vulnerable" || t.StartsWith("failed")) return Rose;
             if (t.StartsWith("partly") || t == "ping only" || t == "resolves" || t == "pending" || t.StartsWith("checking") || t == "listening" || t == "update available" || t == "reboot pending" || t.StartsWith("scanning")) return Amber;
             return Dim;
-        }
-    }
-
-    // ───────────────────────────── columns and rows ─────────────────────────────
-    public class Col
-    {
-        public string Key, Title; public int Width; public bool Right, Editable, Hidden; public Func<object, object> Get; public Func<object, string> Fmt; public Func<object, Color> Color; public Action<object, string> Set; public Func<object, object> SortKey;
-        public Col(string key, string title, int width, Func<object, object> get) { Key = key; Title = title; Width = width; Get = get; }
-        public Col Num(Func<object, string> fmt) { Right = true; Fmt = fmt; return this; }
-        public Col Colour(Func<object, Color> c) { Color = c; return this; }
-        public Col Edit(Action<object, string> set) { Editable = true; Set = set; return this; }
-        public string Text(object item) { object v = Get(item); if (Fmt != null) return Fmt(item); return v == null ? "" : (v is DateTime ? (((DateTime)v) == DateTime.MinValue ? "" : ((DateTime)v).ToString("yyyy-MM-dd HH:mm")) : v.ToString()); }
-        public object Sortable(object item) { if (SortKey != null) return SortKey(item); object v = Get(item); return v; }
-    }
-
-    /// <summary>One filter condition on a column: operator + value. Rules on a view are ANDed. Key "*" means any column.</summary>
-    public class FilterRule
-    {
-        public string Key, Op, Value = ""; public bool MatchCase; public HashSet<string> AnyOf; // AnyOf: header value checklist - the cell must be one of these
-        public static readonly string[] Ops = { "contains", "does not contain", "equals", "does not equal", "starts with", "ends with", "matches regex", "is empty", "is not empty", "greater than", "less than", "at least", "at most" };
-        public static bool NeedsValue(string op) { return op != "is empty" && op != "is not empty"; }
-        public bool Negative { get { return Op == "does not contain" || Op == "does not equal" || Op == "is empty"; } }
-        public string Describe(IList<Col> cols) { string n = Key == "*" ? "any column" : Key; foreach (Col c in cols) if (c.Key == Key) n = c.Title; if (AnyOf != null) return n + " is one of " + AnyOf.Count + " value" + (AnyOf.Count == 1 ? "" : "s"); return n + " " + Op + (NeedsValue(Op) ? " “" + Value + "”" : ""); }
-        public bool Test(string text)
-        {
-            if (AnyOf != null) return AnyOf.Contains((text ?? "").Trim());
-            string t = text ?? ""; string v = Value ?? ""; StringComparison sc = MatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-            switch (Op)
-            {
-                case "contains": return t.IndexOf(v, sc) >= 0;
-                case "does not contain": return t.IndexOf(v, sc) < 0;
-                case "equals": return string.Equals(t.Trim(), v.Trim(), sc);
-                case "does not equal": return !string.Equals(t.Trim(), v.Trim(), sc);
-                case "starts with": return t.TrimStart().StartsWith(v, sc);
-                case "ends with": return t.TrimEnd().EndsWith(v, sc);
-                case "matches regex": try { return Regex.IsMatch(t, v, MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase); } catch { return false; }
-                case "is empty": return t.Trim().Length == 0;
-                case "is not empty": return t.Trim().Length > 0;
-                case "greater than": case "less than": case "at least": case "at most":
-                    {
-                        double a, b; int r; if (Number(t, out a) && Number(v, out b)) r = a.CompareTo(b); else r = string.Compare(t, v, sc);
-                        return Op == "greater than" ? r > 0 : Op == "less than" ? r < 0 : Op == "at least" ? r >= 0 : r <= 0;
-                    }
-            }
-            return true;
-        }
-        static readonly Regex NumRx = new Regex(@"^\s*(-?[\d,]*\.?\d+)\s*(%|ms|s|B|KB|MB|GB|TB|K|M|G)?(?![A-Za-z])", RegexOptions.IgnoreCase);
-        /// <summary>The leading number of a cell, with KB/MB/GB/TB scaled to bytes, so "Size at least 10 MB" and "DNS less than 50" read naturally.</summary>
-        public static bool Number(string s, out double d)
-        {
-            d = 0; if (s == null) return false; Match m = NumRx.Match(s); if (!m.Success) return false;
-            if (!double.TryParse(m.Groups[1].Value.Replace(",", ""), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return false;
-            string u = m.Groups[2].Value.ToUpperInvariant();
-            if (u == "KB" || u == "K") d *= 1024; else if (u == "MB" || u == "M") d *= 1048576; else if (u == "GB" || u == "G") d *= 1073741824.0; else if (u == "TB") d *= 1099511627776.0;
-            return true;
         }
     }
 
@@ -192,7 +142,7 @@ namespace PSTools
     /// <summary>A grid, a details layout, or a tree over the same rows, with checkbox multi-select, sort, search, per-column filter rules, export.</summary>
     public class DataView : UserControl
     {
-        public List<Col> Cols = new List<Col>(); public Func<object, string[]> TreePath; public Func<string, List<object>, string> TreeNodeText; public Func<object, bool> Filter; public Func<object, Color> RowColor; public Func<object, bool> Dimmed;
+        public List<Col> Cols = new List<Col>(); public Func<object, string[]> TreePath; public Func<string, List<object>, string> TreeNodeText; public Func<object, bool> Filter; public Func<object, Tone> RowTone; public Func<object, bool> Dimmed;
         public event Action SelectionChanged; public event Action<object> Activated; public event Action ViewChanged;
         readonly List<object> all = new List<object>(); List<object> rows = new List<object>(); readonly HashSet<object> selected = new HashSet<object>();
         readonly DataGridView grid = new DataGridView(); readonly TreeView tree = new TreeView(); readonly Panel detail = new Panel(); readonly DataGridView props = new DataGridView(); readonly SplitContainer detailSplit = new SplitContainer();
@@ -289,6 +239,8 @@ namespace PSTools
             if (rules.RemoveAll(delegate (FilterRule r) { return r.Key != "*" && Cols.Find(delegate (Col x) { return x.Key == r.Key; }) == null; }) > 0) { RebuildChips(); UpdateFilterButton(); }
             FillFilterColumns(); treeDirty = true; Apply();
         }
+        /// <summary>Takes a whole table definition - export name, tree grouping, row tone, dimming and columns - the one call a panel makes per mode. The same definition drives the command line.</summary>
+        public void Apply(TableDef d) { ExportName = d.Export; TreePath = d.Tree; TreeNodeText = d.TreeText; RowTone = d.RowTone; Dimmed = d.Dimmed; SetColumns(d.Cols); }
         public void SetItems(IEnumerable<object> items, bool keepSelection)
         {
             HashSet<object> keep = keepSelection ? new HashSet<object>(selected) : null;
@@ -377,18 +329,7 @@ namespace PSTools
             chips.ResumeLayout();
         }
         void UpdateFilterButton() { bFilter.Text = rules.Count > 0 ? "Filter (" + rules.Count + ")" : "Filter"; bFilter.ForeColor = rules.Count > 0 ? Theme.Teal : Theme.Ink; bFilter.FlatAppearance.BorderColor = rules.Count > 0 || fbar.Visible ? Theme.Teal : Theme.Line; }
-        bool PassRules(object o)
-        {
-            foreach (FilterRule r in rules)
-            {
-                if (r.Key != "*") { Col c = Cols.Find(delegate (Col x) { return x.Key == r.Key; }); if (c == null) continue; if (!r.Test(SafeText(c, o))) return false; continue; }
-                // any column: a positive rule needs one column to pass, a negative rule needs every column to pass
-                bool neg = r.Negative, any = false, allOk = true;
-                foreach (Col c in Cols) { bool ok = r.Test(SafeText(c, o)); if (ok) any = true; else allOk = false; }
-                if (neg ? !allOk : !any) return false;
-            }
-            return true;
-        }
+        bool PassRules(object o) { return FilterRule.Pass(rules, Cols, o); }
         void BuildMenu()
         {
             menu.Items.Clear(); if (menuRow < 0 || menuRow >= rows.Count || menuCol < 0 || menuCol >= Cols.Count) return;
@@ -414,7 +355,7 @@ namespace PSTools
         static ToolStripMenuItem Item(string text, EventHandler h) { ToolStripMenuItem m = new ToolStripMenuItem(text); m.ForeColor = Theme.Ink; m.Click += h; return m; }
         string RowText(object o) { List<string> l = new List<string>(); foreach (Col c in Cols) if (!c.Hidden) l.Add(SafeText(c, o)); return string.Join("\t", l.ToArray()); }
         /// <summary>A cell text that can never throw: a column accessor applied to a row of another type (mid mode-switch) or odd data yields "" instead of an exception.</summary>
-        public static string SafeText(Col c, object o) { try { return c.Text(o) ?? ""; } catch { return ""; } }
+        public static string SafeText(Col c, object o) { return c.SafeText(o); }
         void CopyRows() { List<object> what = SelectedItems.Count > 0 ? SelectedItems : new List<object>(rows); List<string> l = new List<string>(); List<string> h = new List<string>(); foreach (Col c in Cols) if (!c.Hidden) h.Add(c.Title); l.Add(string.Join("\t", h.ToArray())); foreach (object o in what) l.Add(RowText(o)); Clip(string.Join("\r\n", l.ToArray())); }
         static void Clip(string s) { try { Clipboard.SetText(s ?? ""); } catch { } }
 
@@ -439,7 +380,7 @@ namespace PSTools
         void Sort()
         {
             Col c = Cols.Find(delegate (Col x) { return x.Key == sortKey; }); if (c == null) return;
-            rows.Sort(delegate (object a, object b) { try { object va = c.Sortable(a), vb = c.Sortable(b); int r; if (va == null && vb == null) r = 0; else if (va == null) r = -1; else if (vb == null) r = 1; else if (va is IComparable && va.GetType() == vb.GetType()) r = ((IComparable)va).CompareTo(vb); else r = string.Compare(va.ToString(), vb.ToString(), StringComparison.OrdinalIgnoreCase); return sortAsc ? r : -r; } catch { return 0; } });
+            RowSort.Sort(rows, c, sortAsc);
             grid.Invalidate();
         }
         void HeaderClick(object s, DataGridViewCellMouseEventArgs e)
@@ -534,7 +475,7 @@ namespace PSTools
         {
             if (e.RowIndex < 0 || e.RowIndex >= rows.Count || e.ColumnIndex == 0) return; int ci = e.ColumnIndex - 1; if (ci < 0 || ci >= Cols.Count) return; object o = rows[e.RowIndex]; Col c = Cols[ci];
             Color fore = Theme.Ink;
-            try { if (RowColor != null) fore = RowColor(o); if (c.Color != null) fore = c.Color(o); if (c.Editable) fore = Theme.Teal; if (Dimmed != null && Dimmed(o)) fore = Theme.Faint; } catch { }
+            try { if (RowTone != null) fore = Theme.Of(RowTone(o)); if (c.ToneOf != null) fore = Theme.Of(c.ToneOf(o)); if (c.Editable) fore = Theme.Teal; if (Dimmed != null && Dimmed(o)) fore = Theme.Faint; } catch { }
             e.CellStyle.ForeColor = fore;
             if (selected.Contains(o)) e.CellStyle.BackColor = Theme.SelRow;
         }
@@ -554,7 +495,7 @@ namespace PSTools
         void ShowProps(object o)
         {
             props.Rows.Clear(); if (o == null) return;
-            foreach (Col c in Cols) { int i = props.Rows.Add(c.Title, SafeText(c, o)); try { if (c.Color != null) props.Rows[i].Cells[1].Style.ForeColor = c.Color(o); } catch { } }
+            foreach (Col c in Cols) { int i = props.Rows.Add(c.Title, SafeText(c, o)); try { if (c.ToneOf != null) props.Rows[i].Cells[1].Style.ForeColor = Theme.Of(c.ToneOf(o)); } catch { } }
         }
         void BuildTree()
         {
@@ -632,19 +573,6 @@ namespace PSTools
             TextRenderer.DrawText(g, Message, Theme.UISmall, new Rectangle(bx, by + Theme.S(9), bw - es.Width - Theme.S(10), Theme.S(18)), Active ? Theme.Ink : Theme.Dim, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             TextRenderer.DrawText(g, el, Theme.UISmall, new Point(bx + bw - es.Width, by + Theme.S(9)), Theme.Dim, TextFormatFlags.NoPrefix);
         }
-    }
-
-    public static class Csv
-    {
-        public static void Write(string path, IList<Col> cols, IList<object> items)
-        {
-            StringBuilder sb = new StringBuilder(); List<string> h = new List<string>(); foreach (Col c in cols) h.Add(Q(c.Title)); sb.AppendLine(string.Join(",", h));
-            foreach (object o in items) { List<string> r = new List<string>(); foreach (Col c in cols) r.Add(Q(c.Text(o))); sb.AppendLine(string.Join(",", r)); }
-            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
-        }
-        public static string Q(string s) { return Fmt.CsvQ(s); }
-        /// <summary>Number of CSV records in a text, honouring quoted fields that contain newlines (RFC 4180).</summary>
-        public static int CountRecords(string text) { if (string.IsNullOrEmpty(text)) return 0; int n = 0; bool q = false, content = false; for (int i = 0; i < text.Length; i++) { char ch = text[i]; if (ch == '"') { q = !q; content = true; } else if (ch == '\n' && !q) { n++; content = false; } else if (ch != '\r') content = true; } if (content) n++; return n; }
     }
 
     /// <summary>The bar that appears when rows are selected, with the actions that apply to them.</summary>
@@ -733,7 +661,7 @@ namespace PSTools
             IsElevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             using (Graphics g = CreateGraphics()) Theme.Dpi = g.DpiX / 96f;
             Text = "PowerTower" + (IsElevated ? "  ·  administrator" : ""); BackColor = Theme.Bg; ForeColor = Theme.Ink; Font = Theme.UI; Icon = AppIcon();
-            Width = int.Parse(Settings.Get("win.w", Theme.S(1280).ToString())); Height = int.Parse(Settings.Get("win.h", Theme.S(820).ToString())); MinimumSize = new Size(Theme.S(980), Theme.S(640)); StartPosition = FormStartPosition.CenterScreen;
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea; Width = Math.Min(int.Parse(Settings.Get("win.w", Theme.S(1280).ToString())), wa.Width); Height = Math.Min(int.Parse(Settings.Get("win.h", Theme.S(820).ToString())), wa.Height);   /* never taller or wider than the work area (PT-17) */ MinimumSize = new Size(Theme.S(980), Theme.S(640)); StartPosition = FormStartPosition.CenterScreen;
             if (Settings.Get("win.max", "0") == "1") WindowState = FormWindowState.Maximized;
             side.Dock = DockStyle.Left; side.Width = Theme.S(250); side.BackColor = Theme.Side;
             Panel brand = new Panel(); brand.Dock = DockStyle.Top; brand.Height = Theme.S(66); brand.BackColor = Theme.Side;
@@ -843,12 +771,13 @@ namespace PSTools
     class SideItem : Panel
     {
         public readonly ToolPanel Panel; bool selected, hover; public event Action<ToolPanel> Picked;
-        public SideItem(ToolPanel p) { Panel = p; Height = Theme.S(36); Dock = DockStyle.Top; Cursor = Cursors.Hand; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true); MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); }; Click += delegate { if (Picked != null) Picked(Panel); }; new ToolTip().SetToolTip(this, p.Blurb); }
+        public SideItem(ToolPanel p) { Panel = p; Height = Theme.S(36); Dock = DockStyle.Top; Cursor = Cursors.Hand; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.Selectable, true); TabStop = true; Text = p.Title; AccessibleName = p.Title; AccessibleRole = AccessibleRole.PushButton; Name = "side_" + p.GetType().Name; GotFocus += delegate { Invalidate(); }; LostFocus += delegate { Invalidate(); }; KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { e.Handled = true; if (Picked != null) Picked(Panel); } }; MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); }; Click += delegate { if (Picked != null) Picked(Panel); }; new ToolTip().SetToolTip(this, p.Blurb); }
         public bool Selected { get { return selected; } set { selected = value; Invalidate(); } }
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics; g.Clear(selected ? Theme.Panel2 : (hover ? Theme.Panel : Theme.Side));
             if (selected) using (Brush b = new SolidBrush(Theme.Teal)) g.FillRectangle(b, 0, 0, 3, Height);
+            if (Focused) using (Pen fp = new Pen(Theme.Teal)) g.DrawRectangle(fp, 1, 1, Width - 3, Height - 3);
             int ic = Theme.S(20); Icons.Paint(g, Panel.GetType().Name, new Rectangle(Theme.S(14), (Height - ic) / 2, ic, ic), selected || hover ? Theme.Teal : Theme.TealSoft);
             TextRenderer.DrawText(g, Panel.Title, selected ? Theme.UIBold : Theme.UI, new Rectangle(Theme.S(44), 0, Width - Theme.S(48), Height), Theme.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             using (Pen p = new Pen(Theme.Line)) g.DrawLine(p, 0, Height - 1, Width, Height - 1);
@@ -929,12 +858,4 @@ namespace PSTools
         }
     }
 
-    public class Settings
-    {
-        readonly string file; readonly Dictionary<string, string> kv = new Dictionary<string, string>();
-        public Settings(string path) { file = path; try { if (File.Exists(file)) foreach (string l in File.ReadAllLines(file)) { int i = l.IndexOf('='); if (i > 0) kv[l.Substring(0, i)] = l.Substring(i + 1); } } catch { } }
-        public string Get(string k, string d) { string v; return kv.TryGetValue(k, out v) ? v : d; }
-        public void Set(string k, string v) { kv[k] = v; }
-        public void Save() { try { StringBuilder sb = new StringBuilder(); foreach (KeyValuePair<string, string> p in kv) sb.Append(p.Key).Append('=').Append(p.Value).Append("\r\n"); File.WriteAllText(file, sb.ToString()); } catch { } }
-    }
 }

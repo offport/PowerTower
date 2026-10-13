@@ -11,8 +11,8 @@ namespace PSTools
 {
     public class FirewallPanel : ToolPanel
     {
-        public override string Title { get { return "Firewall Rules"; } }
-        public override string Blurb { get { return "Every Windows Firewall rule as a sortable table, with the risky ones flagged: inbound Allow rules open to any address, rules that open all ports, or rules not tied to a program. The profile bar shows whether the firewall is actually on."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
 
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly StepStrip steps = new StepStrip();
         readonly Button bScan; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
@@ -29,9 +29,7 @@ namespace PSTools
             foreach (Control c in new Control[] { bScan, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sTotal, sEnabled, sInbound, sRisky, sFw }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
-            view = NewView("firewall-rules"); view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { FwRule f = (FwRule)o; return f.Risk == "high" ? Theme.Rose : f.Risk == "medium" ? Theme.Amber : f.Risk == "low" ? Theme.Blue : f.Enabled ? Theme.Ink : Theme.Faint; };
-            view.TreePath = delegate (object o) { FwRule f = (FwRule)o; return new string[] { f.Direction == "in" ? "inbound" : "outbound", f.Action, f.Name }; };
+            view = NewView("firewall-rules"); view.Apply(Columns.FirewallRules());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "rule"); };
             view.Filter = FilterRow;
             lDir = Theme.Lbl("direction", Theme.Dim, Theme.UI); cDir = Theme.Combo(110, "all", "inbound", "outbound"); cRisky = Theme.Toggle("risky only", false); cEnabledOnly = Theme.Toggle("enabled only", false);
@@ -42,23 +40,6 @@ namespace PSTools
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("risk", "Risk", 62, delegate (object o) { FwRule f = (FwRule)o; return f.Risk == "high" ? 0 : f.Risk == "medium" ? 1 : f.Risk == "low" ? 2 : 3; }).Num(delegate (object o) { return ((FwRule)o).Risk; }).Colour(delegate (object o) { FwRule f = (FwRule)o; return f.Risk == "high" ? Theme.Rose : f.Risk == "medium" ? Theme.Amber : f.Risk == "low" ? Theme.Blue : Theme.Ink; }));
-            c.Add(new Col("name", "Rule", 280, delegate (object o) { return ((FwRule)o).Name; }));
-            c.Add(new Col("on", "Enabled", 74, delegate (object o) { return ((FwRule)o).Enabled ? "on" : "off"; }).Colour(delegate (object o) { return ((FwRule)o).Enabled ? Theme.Green : Theme.Faint; }));
-            c.Add(new Col("dir", "Direction", 84, delegate (object o) { return ((FwRule)o).Direction == "in" ? "inbound" : "outbound"; }));
-            c.Add(new Col("act", "Action", 70, delegate (object o) { return ((FwRule)o).Action; }).Colour(delegate (object o) { return ((FwRule)o).Action == "allow" ? Theme.Green : Theme.Rose; }));
-            c.Add(new Col("proto", "Protocol", 74, delegate (object o) { return ((FwRule)o).Protocol; }));
-            c.Add(new Col("lports", "Local ports", 110, delegate (object o) { FwRule f = (FwRule)o; return f.LocalPorts.Length == 0 ? "any" : f.LocalPorts; }));
-            c.Add(new Col("remote", "Remote address", 150, delegate (object o) { FwRule f = (FwRule)o; return f.RemoteAddresses.Length == 0 || f.RemoteAddresses == "*" ? "any" : f.RemoteAddresses; }).Colour(delegate (object o) { FwRule f = (FwRule)o; return (f.RemoteAddresses.Length == 0 || f.RemoteAddresses == "*") && f.Inbound && f.Allow ? Theme.Amber : Theme.Dim; }));
-            c.Add(new Col("profiles", "Profiles", 130, delegate (object o) { return ((FwRule)o).Profiles; }).Colour(delegate (object o) { return ((FwRule)o).Profiles.Contains("public") || ((FwRule)o).Profiles == "all" ? Theme.Ink : Theme.Dim; }));
-            c.Add(new Col("why", "Why flagged", 260, delegate (object o) { return ((FwRule)o).RiskWhy; }).Colour(delegate (object o) { return Theme.Amber; }));
-            c.Add(new Col("prog", "Program", 320, delegate (object o) { FwRule f = (FwRule)o; return f.Program.Length > 0 ? f.Program : (f.Service.Length > 0 ? "service: " + f.Service : "(any program)"); }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("group", "Group", 200, delegate (object o) { return ((FwRule)o).Group; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
 
         bool FilterRow(object o)
         {

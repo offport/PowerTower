@@ -12,9 +12,9 @@ namespace PSTools
 {
     public class AutorunsPanel : ToolPanel
     {
-        public override string Title { get { return "Autoruns"; } }
-        public override string Blurb { get { return "Every place Windows starts a program on its own: run keys, startup folders, scheduled tasks, services, Winlogon, image hijacks and WMI subscriptions. Each shows the program it runs, its signer and a risk flag. Disable or delete what you don't want."; } }
-        public override bool NeedsAdmin { get { return true; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
+        public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
 
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly StepStrip steps = new StepStrip();
         readonly Button bScan, bCancel; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
@@ -32,9 +32,7 @@ namespace PSTools
             foreach (Control c in new Control[] { bScan, bCancel, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sTotal, sRisk, sUnsigned, sMissing, sKinds }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
-            view = NewView("autoruns"); view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { return RiskColor(((AutorunEntry)o).Risk); };
-            view.TreePath = delegate (object o) { AutorunEntry e = (AutorunEntry)o; return new string[] { e.Kind, e.Name }; };
+            view = NewView("autoruns"); view.Apply(Columns.Autoruns());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "entry"); };
             view.Activated += delegate (object o) { AutorunEntry e = (AutorunEntry)o; if (e.Image.Length > 0) Dialogs.OpenInExplorer(System.IO.Path.GetDirectoryName(e.Image)); };
             view.Filter = FilterRow;
@@ -50,25 +48,6 @@ namespace PSTools
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("risk", "Risk", 68, delegate (object o) { return RiskRank((AutorunEntry)o); }).Num(delegate (object o) { return ((AutorunEntry)o).Risk; }).Colour(delegate (object o) { return RiskColor(((AutorunEntry)o).Risk); }));
-            c.Add(new Col("kind", "Kind", 130, delegate (object o) { return ((AutorunEntry)o).Kind; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("name", "Name", 210, delegate (object o) { return ((AutorunEntry)o).Name; }));
-            c.Add(new Col("on", "Enabled", 76, delegate (object o) { return ((AutorunEntry)o).Enabled ? "enabled" : "disabled"; }).Colour(delegate (object o) { return ((AutorunEntry)o).Enabled ? Theme.Green : Theme.Faint; }));
-            c.Add(new Col("sig", "Signature", 170, delegate (object o) { AutorunEntry e = (AutorunEntry)o; return e.Image.Length == 0 ? "" : e.Sig.Status.Length == 0 ? (e.Exists ? "" : "file missing") : e.Sig.Short; }).Colour(delegate (object o) { return SigColor((AutorunEntry)o); }));
-            c.Add(new Col("where", "Location on disk", 110, delegate (object o) { return ((AutorunEntry)o).Where; }).Colour(delegate (object o) { AutorunEntry e = (AutorunEntry)o; return e.Where == "user-writable" || e.Where == "other" ? Theme.Amber : Theme.Dim; }));
-            c.Add(new Col("cmd", "Command", 300, delegate (object o) { return ((AutorunEntry)o).Command; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("why", "Why flagged", 240, delegate (object o) { return ((AutorunEntry)o).RiskWhy; }).Colour(delegate (object o) { return Theme.Amber; }));
-            c.Add(new Col("desc", "Description", 200, delegate (object o) { AutorunEntry e = (AutorunEntry)o; return e.Description.Length > 0 ? e.Description : e.Company; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("scope", "Scope", 70, delegate (object o) { return ((AutorunEntry)o).Scope; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("loc", "Registry / path", 320, delegate (object o) { return ((AutorunEntry)o).Location; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        static int RiskRank(AutorunEntry e) { return e.Risk == "high" ? 0 : e.Risk == "medium" ? 1 : e.Risk == "low" ? 2 : 3; }
-        static Color RiskColor(string r) { return r == "high" ? Theme.Rose : r == "medium" ? Theme.Amber : r == "low" ? Theme.Blue : Theme.Ink; }
-        static Color SigColor(AutorunEntry e) { if (e.Image.Length == 0) return Theme.Faint; if (!e.Exists) return Theme.Amber; if (e.Sig.Status == "invalid") return Theme.Rose; if (e.Sig.Status == "unsigned") return Theme.Amber; if (e.Sig.Ok) return e.Sig.Microsoft ? Theme.Dim : Theme.Green; return Theme.Faint; }
 
         bool FilterRow(object o)
         {

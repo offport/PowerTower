@@ -15,8 +15,8 @@ namespace PSTools
 {
     public class SoftwarePanel : ToolPanel
     {
-        public override string Title { get { return "Software Inventory"; } }
-        public override string Blurb { get { return "Every program installed on this machine and its version. Scan for CVEs to flag the vulnerable ones with their severity, worst CVE, whether it is known-exploited, and the version to upgrade to. Filter by anything — vulnerable only, severity, publisher, or any column."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly StepStrip steps = new StepStrip();
         readonly Button bRefresh, bScan, bCancel; readonly TextBox tKey; readonly CheckBox cKev, cEpss; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
         readonly Stat sTotal = new Stat("programs"), sChecked = new Stat("checked"), sVuln = new Stat("vulnerable"), sCrit = new Stat("critical"), sHigh = new Stat("high"), sExpl = new Stat("exploited"), sMapped = new Stat("in CVE map");
@@ -36,9 +36,7 @@ namespace PSTools
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 7; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sTotal, sChecked, sVuln, sCrit, sHigh, sExpl, sMapped }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 7)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
             view = NewView("software-inventory");
-            view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { Software s = (Software)o; if (!s.Vulnerable) return Theme.Ink; return Theme.SeverityColor(s.WorstSeverity) == Theme.Faint ? Theme.Rose : Theme.SeverityColor(s.WorstSeverity); };
-            view.TreePath = delegate (object o) { Software s = (Software)o; return new string[] { s.VulnState.Length > 0 ? s.VulnState : "not checked", s.Publisher.Length > 0 ? s.Publisher : "(no publisher)", s.Name }; };
+            view.Apply(Columns.Software());
             lSev = Theme.Lbl("severity", Theme.Dim, Theme.UI); cSev = Theme.Combo(96, "all", "critical", "high +", "medium +"); cVulnOnly = Theme.Toggle("vulnerable only", false); cExplOnly = Theme.Toggle("exploited only", false); cMappedOnly = Theme.Toggle("in CVE map only", false);
             foreach (Control c in new Control[] { lSev, cSev, cVulnOnly, cExplOnly, cMappedOnly }) view.Extra.Controls.Add(c);
             cSev.SelectedIndexChanged += delegate { view.Refilter(); }; cVulnOnly.CheckedChanged += delegate { view.Refilter(); }; cExplOnly.CheckedChanged += delegate { view.Refilter(); }; cMappedOnly.CheckedChanged += delegate { view.Refilter(); };
@@ -53,27 +51,6 @@ namespace PSTools
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("name", "Program", 290, delegate (object o) { return ((Software)o).Name; }));
-            c.Add(new Col("ver", "Version", 120, delegate (object o) { return ((Software)o).Version; }));
-            c.Add(new Col("state", "Vulnerable", 92, delegate (object o) { return Rank((Software)o); }).Num(delegate (object o) { return ((Software)o).VulnState; }).Colour(delegate (object o) { Software s = (Software)o; return s.Vulnerable ? Theme.Rose : s.Mapped ? Theme.Green : Theme.Dim; }));
-            c.Add(new Col("sev", "Severity", 82, delegate (object o) { return Resolve.SevRank(((Software)o).WorstSeverity); }).Num(delegate (object o) { return ((Software)o).WorstSeverity; }).Colour(delegate (object o) { return Theme.SeverityColor(((Software)o).WorstSeverity); }));
-            c.Add(new Col("cvss", "CVSS", 58, delegate (object o) { return ((Software)o).WorstCvss ?? -1; }).Num(delegate (object o) { Software s = (Software)o; return s.WorstCvss.HasValue ? s.WorstCvss.Value.ToString("0.0") : ""; }));
-            c.Add(new Col("cves", "CVEs", 58, delegate (object o) { return ((Software)o).Cves; }).Num(delegate (object o) { Software s = (Software)o; return s.Cves < 0 ? "" : s.Cves.ToString() + (s.Unconfirmed > 0 ? " +" + s.Unconfirmed : ""); }).Colour(delegate (object o) { return ((Software)o).Cves > 0 ? Theme.Rose : Theme.Dim; }));
-            c.Add(new Col("worst", "Worst CVE", 130, delegate (object o) { return ((Software)o).WorstCve; }));
-            c.Add(new Col("expl", "Exploited", 108, delegate (object o) { return ((Software)o).ExploitText; }).Colour(delegate (object o) { return Theme.Rose; }));
-            c.Add(new Col("epss", "EPSS", 62, delegate (object o) { return ((Software)o).WorstEpss ?? -1; }).Num(delegate (object o) { Software s = (Software)o; return s.WorstEpss.HasValue ? (s.WorstEpss.Value * 100).ToString("0.0") + " %" : ""; }));
-            c.Add(new Col("fix", "Fix", 190, delegate (object o) { return ((Software)o).Fix; }).Colour(delegate (object o) { return Theme.Green; }));
-            c.Add(new Col("pub", "Publisher", 180, delegate (object o) { return ((Software)o).Publisher; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("inst", "Installed", 90, delegate (object o) { return ((Software)o).Installed; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("scope", "Scope", 110, delegate (object o) { return ((Software)o).Scope; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("cpe", "NVD product", 170, delegate (object o) { return ((Software)o).Cpe; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("status", "Status", 260, delegate (object o) { return ((Software)o).Status; }).Colour(delegate (object o) { Software s = (Software)o; return s.Cves > 0 ? Theme.Amber : s.Status.StartsWith("lookup failed") ? Theme.Rose : Theme.Dim; }));
-            return c;
-        }
-        static int Rank(Software s) { return s.Vulnerable ? 0 : s.Mapped ? 1 : 2; }
 
         bool FilterRow(object o)
         {

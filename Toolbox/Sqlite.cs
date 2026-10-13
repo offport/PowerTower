@@ -188,7 +188,7 @@ namespace PSTools
             static int Varint(byte[] b, int off, out long value)
             {
                 value = 0; int i = 0;
-                for (; i < 8; i++) { int by = At(b, off + i); value = (value << 7) | (long)(by & 0x7F); if ((by & 0x80) == 0) return i + 1; }
+                for (; i < 8; i++) { int by = At(b, off + i); value = (value << 7) | (long)(uint)(by & 0x7F); if ((by & 0x80) == 0) return i + 1; }
                 value = (value << 8) | (long)(uint)At(b, off + 8); return 9;
             }
         }

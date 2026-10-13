@@ -26,6 +26,7 @@ namespace PSTools
         public long MinBytes = 1024; public bool SkipHidden = true;
         public long FilesSeen, Hashed; public string Current = ""; public string Phase = "";
         readonly FastWalk walk = new FastWalk();
+        readonly object gate = new object();   // FastWalk calls the scan delegate from many threads at once
 
         /// <summary>Run to completion (background). progress() is called periodically; returns the confirmed duplicate groups, largest wasted first.</summary>
         public List<DupeGroup> Run(Action progress)
@@ -36,11 +37,19 @@ namespace PSTools
             walk.Run(delegate (FileInfo fi)
             {
                 if (Cancel) { walk.Stop(); return; }
-                Current = fi.FullName; FilesSeen++;
-                try { if (fi.Length < MinBytes) return; if (SkipHidden && (fi.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0) return; } catch { return; }
-                DupeFile d = new DupeFile(); d.Path = fi.FullName; d.Name = fi.Name; d.Dir = fi.DirectoryName ?? ""; d.Size = fi.Length; try { d.Modified = fi.LastWriteTime; } catch { }
-                List<DupeFile> list; if (!bySize.TryGetValue(fi.Length, out list)) { list = new List<DupeFile>(); bySize[fi.Length] = list; } list.Add(d);
-                if (progress != null && (FilesSeen & 1023) == 0) progress();
+                Current = fi.FullName;
+                long len; try { if (fi.Length < MinBytes) return; if (SkipHidden && (fi.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0) return; len = fi.Length; } catch { return; }
+                DupeFile d = new DupeFile(); d.Path = fi.FullName; d.Name = fi.Name; d.Dir = fi.DirectoryName ?? ""; d.Size = len; try { d.Modified = fi.LastWriteTime; } catch { }
+                bool tick;
+                // bySize and the counters are shared across the walk's worker threads: a plain Dictionary write
+                // from several threads corrupts it (the failure surfaces later as an NRE in the hashing phase).
+                lock (gate)
+                {
+                    FilesSeen++;
+                    List<DupeFile> list; if (!bySize.TryGetValue(len, out list)) { list = new List<DupeFile>(); bySize[len] = list; } list.Add(d);
+                    tick = progress != null && (FilesSeen & 1023) == 0;
+                }
+                if (tick) progress();
             });
             if (Cancel) return new List<DupeGroup>();
 

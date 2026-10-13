@@ -17,8 +17,9 @@ namespace PSTools
 
     public class SecretRule
     {
-        public string Kind, Severity; public Regex Rx; public bool NeedsEntropy;
-        public SecretRule(string kind, string sev, string pattern, bool entropy) { Kind = kind; Severity = sev; Rx = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant); NeedsEntropy = entropy; }
+        public string Kind, Severity; public Regex Rx; public bool NeedsEntropy, Generic;   // Generic: a key=value rule that can match documentation placeholders; vendor-shaped rules (AKIA..., ghp_..., PEM) never go through the placeholder filter
+        public SecretRule(string kind, string sev, string pattern, bool entropy) : this(kind, sev, pattern, entropy, false) { }
+        public SecretRule(string kind, string sev, string pattern, bool entropy, bool generic) { Kind = kind; Severity = sev; Rx = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant); NeedsEntropy = entropy; Generic = generic; }
     }
 
     public class SecretsScan
@@ -46,10 +47,10 @@ namespace PSTools
             new SecretRule("Slack webhook", "medium", @"https://hooks\.slack\.com/services/[A-Za-z0-9/]+", false),
             new SecretRule("JWT", "medium", @"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b", false),
             new SecretRule("Private key (PuTTY)", "high", @"PuTTY-User-Key-File-\d", false),
-            new SecretRule("Connection string password", "high", @"(?i)(password|pwd)\s*=\s*[^;\s""']{4,}", false),
-            new SecretRule("Bearer token", "medium", @"(?i)authorization\s*[:=]\s*['""]?bearer\s+[A-Za-z0-9\-._~+/]{16,}", false),
-            new SecretRule("Generic API key", "medium", @"(?i)(api[_-]?key|apikey|access[_-]?token|secret[_-]?key|client[_-]?secret)\s*[:=]\s*['""]?[A-Za-z0-9\-_./+]{16,}['""]?", true),
-            new SecretRule("Generic password", "low", @"(?i)\b(password|passwd|passphrase)\s*[:=]\s*['""]?[^\s""']{6,}['""]?", false),
+            new SecretRule("Connection string password", "high", @"(?i)(password|pwd)\s*=\s*[^;\s""']{4,}", false, true),
+            new SecretRule("Bearer token", "medium", @"(?i)authorization\s*[:=]\s*['""]?bearer\s+[A-Za-z0-9\-._~+/]{16,}", false, true),
+            new SecretRule("Generic API key", "medium", @"(?i)(api[_-]?key|apikey|access[_-]?token|secret[_-]?key|client[_-]?secret)\s*[:=]\s*['""]?[A-Za-z0-9\-_./+]{16,}['""]?", true, true),
+            new SecretRule("Generic password", "low", @"(?i)\b(password|passwd|passphrase)\s*[:=]\s*['""]?[^\s""']{6,}['""]?", false, true),
         });
 
         public void Run(Action<SecretHit> onHit, Action progress)
@@ -91,7 +92,7 @@ namespace PSTools
                     Match m = rule.Rx.Match(line); if (!m.Success) continue;
                     string val = m.Value; double ent = Entropy(LongestToken(val));
                     if (rule.NeedsEntropy && ent < 3.2) continue;
-                    if (IsPlaceholder(val)) continue;
+                    if (rule.Generic && IsPlaceholder(val)) continue;
                     SecretHit h = new SecretHit(); h.Path = path; h.File = name; h.Kind = rule.Kind; h.Severity = rule.Severity; h.Line = i + 1; h.Match = val.Length > 200 ? val.Substring(0, 200) : val; h.Preview = Mask(m.Value.Trim()); h.Entropy = Math.Round(ent, 1);
                     onHit(h); break; // one hit per line is enough
                 }
@@ -102,7 +103,10 @@ namespace PSTools
         static bool IsPlaceholder(string s)
         {
             string low = s.ToLowerInvariant();
-            foreach (string p in new string[] { "example", "your_", "yourkey", "placeholder", "xxxx", "<", "changeme", "dummy", "sample", "test_key", "000000", "123456", "redacted", "*****", "insert", "todo", "n/a", "none" }) if (low.Contains(p)) return true;
+            foreach (string p in new string[] { "example", "your_", "yourkey", "placeholder", "xxxx", "<", "changeme", "test_key", "redacted", "*****", "insert" }) if (low.Contains(p)) return true;
+            // short words only count when they are the whole value (or start it): a real secret that merely contains "123456" or "none" is still a secret
+            int sep = low.IndexOfAny(new char[] { '=', ':' }); string v = (sep >= 0 ? low.Substring(sep + 1) : low).Trim().Trim('"', '\'');
+            foreach (string p in new string[] { "000000", "123456", "dummy", "sample", "todo", "n/a", "none" }) if (v == p || v.StartsWith(p + "-") || v.StartsWith(p + "_") || v.StartsWith(p + " ")) return true;
             return false;
         }
         static string Mask(string s)

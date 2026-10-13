@@ -40,28 +40,15 @@ namespace PSTools
             using (OpenFileDialog d = new OpenFileDialog()) { d.Title = title; d.Filter = filter; return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null; }
         }
         public static void OpenInExplorer(string path) { try { if (Directory.Exists(path)) Process.Start("explorer.exe", "\"" + path + "\""); else Process.Start("explorer.exe", "/select,\"" + path + "\""); } catch { } }
-        public static string Spark(List<double> h, int width)
-        {
-            if (h == null || h.Count == 0) return ""; string blocks = "▁▂▃▄▅▆▇█"; double max = 0; int start = Math.Max(0, h.Count - width);
-            for (int i = start; i < h.Count; i++) if (h[i] > max) max = h[i];
-            StringBuilder sb = new StringBuilder(); for (int i = start; i < h.Count; i++) { double v = h[i]; sb.Append(max <= 0 || v <= 0 ? '▁' : blocks[Math.Min(7, (int)Math.Floor(v / max * 7.999))]); }
-            return sb.ToString();
-        }
+        public static string Spark(List<double> h, int width) { return Fmt.Spark(h, width); }
     }
 
     // ═══════════════════════════════ 1 · Domain and IP Blocker ═══════════════════════════════
-    public class BlockItem
-    {
-        public string Value, Source, Where = "", Note = ""; public Kind Kind; public int Line; public bool BlockedHosts, BlockedFw;
-        public string Status { get { if (Kind == Kind.Invalid) return "not a valid domain or IP"; if (BlockedHosts || BlockedFw) return "blocked"; return "not blocked"; } }
-        public string KindText { get { return Kind == Kind.Domain ? "domain" : Kind == Kind.IPv4 ? "IPv4" : Kind == Kind.IPv6 ? "IPv6" : "invalid"; } }
-    }
-
     public class BlockerPanel : ToolPanel
     {
-        public override string Title { get { return "Domain and IP Blocker"; } }
-        public override string Blurb { get { return "Load domains and IPs from any file or paste, review them as rows, block or unblock the ones you pick. Domains go to the hosts file, IPs to one firewall rule; everything is tagged, backed up and reversible."; } }
-        public override bool NeedsAdmin { get { return true; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
+        public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Hosts hosts = new Hosts();
         readonly List<BlockItem> loaded = new List<BlockItem>(); readonly List<BlockItem> blocked = new List<BlockItem>(); bool showBlocked;
         readonly Button bList, bBlocked, bFile, bPaste, bAdd, bBlockAll, bRefresh, bBackups, bFlush; readonly CheckBox cHosts, cFw, cWww; readonly TextBox tSink; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
@@ -89,9 +76,7 @@ namespace PSTools
             status.Margin = new Padding(Theme.S(16), Theme.S(9), 0, 0);
             // the rows
             view = NewView("block-list");
-            view.SetColumns(LoadedCols());
-            view.TreePath = delegate (object o) { BlockItem b = (BlockItem)o; return new string[] { b.KindText, Group(b), b.Value }; };
-            view.RowColor = delegate (object o) { return Theme.Ink; };
+            view.Apply(Columns.BlockerLoaded(Classify));
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "item"); };
             view.Activated += delegate (object o) { view.Select(new object[] { o }, !view.SelectedItems.Contains(o)); };
             // selection bar
@@ -99,42 +84,14 @@ namespace PSTools
             Controls.Add(view); Controls.Add(sel); Controls.Add(bar2); Controls.Add(bar); view.BringToFront();
             SetMode(false);
         }
-        List<Col> LoadedCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("value", "Domain / IP", 260, delegate (object o) { return ((BlockItem)o).Value; }).Edit(delegate (object o, string v) { BlockItem b = (BlockItem)o; b.Value = v.Trim().ToLowerInvariant(); b.Kind = Extractor.Classify(b.Value); b.Note = b.Kind == Kind.Invalid ? "not a domain or IP" : ""; Classify(b); }));
-            c.Add(new Col("kind", "Kind", 80, delegate (object o) { return ((BlockItem)o).KindText; }));
-            c.Add(new Col("status", "Status", 150, delegate (object o) { return ((BlockItem)o).Status; }).Colour(delegate (object o) { return Theme.StatusColor(((BlockItem)o).Status); }));
-            c.Add(new Col("where", "Blocked by", 150, delegate (object o) { BlockItem b = (BlockItem)o; List<string> w = new List<string>(); if (b.BlockedHosts) w.Add("hosts file"); if (b.BlockedFw) w.Add("firewall"); return string.Join(" + ", w); }));
-            c.Add(new Col("note", "Note", 160, delegate (object o) { return ((BlockItem)o).Note; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("line", "Line", 50, delegate (object o) { return ((BlockItem)o).Line == 0 ? (object)"" : ((BlockItem)o).Line; }).Num(delegate (object o) { return ((BlockItem)o).Line == 0 ? "" : ((BlockItem)o).Line.ToString(); }));
-            c.Add(new Col("source", "Source line", 400, delegate (object o) { return ((BlockItem)o).Source; }).Colour(delegate (object o) { return Theme.Dim; }));
-            return c;
-        }
-        List<Col> BlockedCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("value", "Domain / IP", 260, delegate (object o) { return ((BlockItem)o).Value; }));
-            c.Add(new Col("kind", "Kind", 80, delegate (object o) { return ((BlockItem)o).KindText; }));
-            c.Add(new Col("where", "Blocked by", 150, delegate (object o) { return ((BlockItem)o).Where; }).Colour(delegate (object o) { return Theme.Green; }));
-            c.Add(new Col("note", "Detail", 400, delegate (object o) { return ((BlockItem)o).Note; }).Colour(delegate (object o) { return Theme.Dim; }));
-            return c;
-        }
-        static string Group(BlockItem b)
-        {
-            if (b.Kind == Kind.Domain) { string[] p = b.Value.Split('.'); return p.Length >= 2 ? p[p.Length - 2] + "." + p[p.Length - 1] : b.Value; }
-            if (b.Kind == Kind.IPv4) { int i = b.Value.LastIndexOf('.'); return i > 0 ? b.Value.Substring(0, i) + ".x" : b.Value; }
-            if (b.Kind == Kind.IPv6) { int i = b.Value.IndexOf(':'); i = i > 0 ? b.Value.IndexOf(':', i + 1) : -1; return i > 0 ? b.Value.Substring(0, i) + ":…" : b.Value; }
-            return "invalid";
-        }
         List<BlockItem> Sel() { List<BlockItem> l = new List<BlockItem>(); foreach (object o in view.Targets) l.Add((BlockItem)o); return l; }
         void SetMode(bool blockedMode)
         {
             showBlocked = blockedMode; view.ExportName = blockedMode ? "blocked-now" : "block-list";
             foreach (Button b in new Button[] { bList, bBlocked }) { bool on = (b == bBlocked) == blockedMode; b.BackColor = on ? Theme.Panel3 : Theme.Panel2; b.ForeColor = on ? Theme.Teal : Theme.Ink; b.FlatAppearance.BorderColor = on ? Theme.Teal : Theme.Line; }
             bBlockAll.Enabled = !blockedMode; bAdd.Enabled = !blockedMode;
-            if (blockedMode) { RefreshBlocked(); view.SetColumns(BlockedCols()); view.SetItems(Boxed(blocked), false); }
-            else { view.SetColumns(LoadedCols()); view.SetItems(Boxed(loaded), false); }
+            if (blockedMode) { RefreshBlocked(); view.Apply(Columns.BlockerBlocked()); view.SetItems(Boxed(blocked), false); }
+            else { view.Apply(Columns.BlockerLoaded(Classify)); view.SetItems(Boxed(loaded), false); }
             UpdateStatus();
         }
         public override void OnShown() { RefreshBlocked(); UpdateStatus(); tSink.Text = Host.Settings.Get("block.sink", "0.0.0.0"); }
@@ -235,7 +192,7 @@ namespace PSTools
         }
         public override void SelfTest(StringBuilder r)
         {
-            string sample = Path.Combine(Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Application.ExecutablePath)), "DomainAndIPBlocker"), "sample-blocklist.txt");
+            string sample = Path.Combine(Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "samples"), "sample-blocklist.txt");
             loaded.Clear(); int n = File.Exists(sample) ? AddLines(File.ReadAllLines(sample), "sample-blocklist.txt") : AddLines(new string[] { "doubleclick.net", "hxxps://malware-c2[.]net/gate.php", "203.0.113.45", "2001:db8:dead:beef::1", "notes.md", "localhost" }, "built-in");
             if (r == null) { SetMode(false); return; }
             int dom = 0, ip = 0; foreach (BlockItem b in loaded) { if (b.Kind == Kind.Domain) dom++; else if (b.Kind != Kind.Invalid) ip++; }
@@ -252,8 +209,8 @@ namespace PSTools
     // ═══════════════════════════════ 2 · Reachability Verifier ═══════════════════════════════
     public class ReachPanel : ToolPanel
     {
-        public override string Title { get { return "Reachability Verifier"; } }
-        public override string Blurb { get { return "Pull every IP and domain out of a file or a paste and check whether this machine can reach them: DNS, ping, and the TCP ports you choose. Send the ones that answer straight to the blocker."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly List<ReachRow> rows = new List<ReachRow>(); Reach engine;
         readonly Button bFile, bPaste, bClear, bRun, bCancel; readonly TextBox tPorts; readonly NumericUpDown nTimeout, nConc; readonly CheckBox cPing; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); readonly ProgressBar prog = new ProgressBar();
         public ReachPanel()
@@ -270,7 +227,6 @@ namespace PSTools
             foreach (Control c in new Control[] { bFile, bPaste, bClear, lp, tPorts, lt, nTimeout, lc, nConc, cPing, bRun, bCancel, prog, status }) bar.Controls.Add(c);
             status.Margin = new Padding(Theme.S(6), Theme.S(9), 0, 0);
             view = NewView("reachability"); SetCols(new int[] { 80, 443 });
-            view.TreePath = delegate (object o) { ReachRow r = (ReachRow)o; return new string[] { r.Status, r.Target.Kind.ToString(), r.Value }; };
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "target"); };
             sel.Add("Send to blocker", true, delegate { List<string> v = new List<string>(); foreach (object o in view.Targets) v.Add(((ReachRow)o).Value); Host.ShowTool<BlockerPanel>(delegate (BlockerPanel b) { b.AddValues(v, "reachability check"); }); });
             sel.Add("Re-check selected", false, delegate { List<ReachRow> l = new List<ReachRow>(); foreach (object o in view.Targets) l.Add((ReachRow)o); Run(l); });
@@ -278,19 +234,7 @@ namespace PSTools
             sel.Add("Export selected", false, delegate { view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(bar); view.BringToFront();
         }
-        void SetCols(int[] ports)
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("target", "Target", 240, delegate (object o) { return ((ReachRow)o).Value; }));
-            c.Add(new Col("kind", "Kind", 70, delegate (object o) { return ((ReachRow)o).Target.Kind.ToString(); }));
-            c.Add(new Col("status", "Status", 110, delegate (object o) { return ((ReachRow)o).Status; }).Colour(delegate (object o) { return Theme.StatusColor(((ReachRow)o).Status); }));
-            c.Add(new Col("dns", "DNS", 70, delegate (object o) { return ((ReachRow)o).DnsMs; }).Num(delegate (object o) { ReachRow r = (ReachRow)o; return r.DnsMs < 0 ? (r.DnsError != null ? "fail" : "") : r.DnsMs + " ms"; }));
-            c.Add(new Col("ip", "Resolves to", 170, delegate (object o) { return string.Join(", ", ((ReachRow)o).Resolved.ToArray()); }));
-            c.Add(new Col("ping", "Ping", 70, delegate (object o) { return ((ReachRow)o).PingMs; }).Num(delegate (object o) { int p = ((ReachRow)o).PingMs; return p == -2 ? "" : p < 0 ? "no reply" : p + " ms"; }).Colour(delegate (object o) { int p = ((ReachRow)o).PingMs; return p >= 0 ? Theme.Green : p == -1 ? Theme.Rose : Theme.Dim; }));
-            foreach (int port in ports) { int pp = port; c.Add(new Col("p" + pp, "TCP " + pp, 80, delegate (object o) { PortResult pr; return ((ReachRow)o).Ports.TryGetValue(pp, out pr) ? (pr.Ok ? 1 : 0) : (object)-1; }).Num(delegate (object o) { PortResult pr; if (!((ReachRow)o).Ports.TryGetValue(pp, out pr)) return ""; return pr.Ok ? "open " + pr.Ms + " ms" : (pr.Error == "timeout" ? "timeout" : "closed"); }).Colour(delegate (object o) { PortResult pr; if (!((ReachRow)o).Ports.TryGetValue(pp, out pr)) return Theme.Dim; return pr.Ok ? Theme.Green : Theme.Rose; })); }
-            c.Add(new Col("source", "Source line", 360, delegate (object o) { return ((ReachRow)o).Target.Source; }).Colour(delegate (object o) { return Theme.Dim; }));
-            view.SetColumns(c);
-        }
+        void SetCols(int[] ports) { view.Apply(Columns.Reach(ports)); }
         int[] ParsePorts() { List<int> l = new List<int>(); foreach (string s in Regex.Split(tPorts.Text, @"[,\s;]+")) { int p; if (int.TryParse(s.Trim(), out p) && p > 0 && p < 65536 && !l.Contains(p)) l.Add(p); } return l.ToArray(); }
         public void AddLines(IEnumerable<string> lines)
         {
@@ -362,8 +306,8 @@ namespace PSTools
     // ═══════════════════════════════ 3 · Connections Monitor ═══════════════════════════════
     public class ConnPanel : ToolPanel
     {
-        public override string Title { get { return "Connections Monitor"; } }
-        public override string Blurb { get { return "Every TCP and UDP endpoint this machine has open, live: process, ports, remote host and state. Closed connections linger greyed for a while. Block a remote address in two clicks."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Dictionary<string, Conn> conns = new Dictionary<string, Conn>(); readonly NameCache names = new NameCache(); readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         readonly Button bRun; readonly ComboBox cInterval, cProto, cState; readonly CheckBox cLoop, cResolve, cKeep; readonly TextBox tProc; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); bool running;
         public ConnPanel()
@@ -379,20 +323,7 @@ namespace PSTools
             status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             cProto.SelectedIndexChanged += delegate { view.Refilter(); }; cState.SelectedIndexChanged += delegate { view.Refilter(); }; cLoop.CheckedChanged += delegate { view.Refilter(); }; tProc.TextChanged += delegate { view.Refilter(); };
             view = NewView("connections");
-            List<Col> c2 = new List<Col>();
-            c2.Add(new Col("proto", "Proto", 60, delegate (object o) { return ((Conn)o).Proto; }));
-            c2.Add(new Col("proc", "Process", 150, delegate (object o) { return ((Conn)o).Process; }));
-            c2.Add(new Col("pid", "PID", 60, delegate (object o) { return ((Conn)o).Pid; }).Num(delegate (object o) { return ((Conn)o).Pid.ToString(); }));
-            c2.Add(new Col("local", "Local", 150, delegate (object o) { return ((Conn)o).Local; }));
-            c2.Add(new Col("lport", "L.port", 60, delegate (object o) { return ((Conn)o).LocalPort; }).Num(delegate (object o) { return ((Conn)o).LocalPort.ToString(); }));
-            c2.Add(new Col("remote", "Remote", 150, delegate (object o) { return ((Conn)o).Remote; }));
-            c2.Add(new Col("rport", "R.port", 60, delegate (object o) { return ((Conn)o).RemotePort; }).Num(delegate (object o) { Conn c = (Conn)o; return c.RemotePort == 0 ? "" : c.RemotePort.ToString(); }));
-            c2.Add(new Col("host", "Remote host", 220, delegate (object o) { return ((Conn)o).Host; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c2.Add(new Col("state", "State", 100, delegate (object o) { return ((Conn)o).State; }).Colour(delegate (object o) { return Theme.StatusColor(((Conn)o).State); }));
-            c2.Add(new Col("first", "First seen", 80, delegate (object o) { return ((Conn)o).FirstSeen; }).Num(delegate (object o) { return ((Conn)o).FirstSeen.ToString("HH:mm:ss"); }));
-            c2.Add(new Col("last", "Last seen", 80, delegate (object o) { return ((Conn)o).LastSeen; }).Num(delegate (object o) { return ((Conn)o).LastSeen.ToString("HH:mm:ss"); }));
-            c2.Add(new Col("alive", "", 60, delegate (object o) { return ((Conn)o).Alive ? "open" : "closed"; }).Colour(delegate (object o) { return ((Conn)o).Alive ? Theme.Dim : Theme.Faint; }));
-            view.SetColumns(c2);
+            view.Apply(Columns.Connections());
             view.Filter = delegate (object o)
             {
                 Conn c = (Conn)o;
@@ -402,8 +333,6 @@ namespace PSTools
                 string pf = tProc.Text.Trim(); if (pf.Length > 0 && (c.Process ?? "").IndexOf(pf, StringComparison.OrdinalIgnoreCase) < 0) return false;
                 return true;
             };
-            view.Dimmed = delegate (object o) { return !((Conn)o).Alive; };
-            view.TreePath = delegate (object o) { Conn c = (Conn)o; return new string[] { c.Process + " [" + c.Pid + "]", c.Remote.Length > 0 ? c.Remote + (c.Host.Length > 0 && c.Host != "…" ? "  " + c.Host : "") : "(" + c.State.ToLowerInvariant() + ")", c.Proto + " " + c.Local + ":" + c.LocalPort + (c.Remote.Length > 0 ? " → " + c.Remote + ":" + c.RemotePort : "") }; };
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "connection"); };
             sel.Add("Block remote IPs", true, delegate { List<string> v = new List<string>(); foreach (object o in view.Targets) { Conn c = (Conn)o; if (c.Remote.Length > 0 && !c.Loopback && !v.Contains(c.Remote)) v.Add(c.Remote); } if (v.Count == 0) { Host.Toast("The selected rows have no remote address.", true); return; } Host.ShowTool<BlockerPanel>(delegate (BlockerPanel b) { b.AddValues(v, "connections monitor"); }); });
             sel.Add("Copy remote IPs", false, delegate { List<string> v = new List<string>(); foreach (object o in view.Targets) { Conn c = (Conn)o; if (c.Remote.Length > 0 && !v.Contains(c.Remote)) v.Add(c.Remote); } if (v.Count > 0) Clipboard.SetText(string.Join("\r\n", v.ToArray())); Host.Toast(v.Count + " address(es) copied", false); });
@@ -469,8 +398,8 @@ namespace PSTools
     // ═══════════════════════════════ 4 · Process Hogs ═══════════════════════════════
     public class HogsPanel : ToolPanel
     {
-        public override string Title { get { return "Resource Usage"; } }
-        public override string Blurb { get { return "Which processes have used the most CPU time, memory and disk I/O since you opened this, not just right now. Exited processes stay in the table, greyed, because their totals still count."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly ProcSampler sampler = new ProcSampler(); readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         readonly Button bRun, bReset; readonly ComboBox cInterval; readonly CheckBox cGroup; readonly Gauge gCpu = new Gauge(), gRam = new Gauge(), gIo = new Gauge(); readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); bool running;
         public HogsPanel()
@@ -487,21 +416,7 @@ namespace PSTools
             gCpu.Label = "CPU"; gRam.Label = "MEMORY"; gRam.Bar = Theme.Amber; gIo.Label = "DISK I/O"; gIo.Bar = Theme.Blue;
             foreach (Gauge g in new Gauge[] { gCpu, gRam, gIo }) { g.Dock = DockStyle.Fill; g.Margin = new Padding(0, 0, 1, 0); gauges.Controls.Add(g); }
             view = NewView("process-hogs");
-            List<Col> c2 = new List<Col>();
-            c2.Add(new Col("name", "Process", 200, delegate (object o) { ProcRow p = (ProcRow)o; return p.Pid == 0 ? p.Name + "  ×" + p.Count : p.Name; }));
-            c2.Add(new Col("pid", "PID", 60, delegate (object o) { return ((ProcRow)o).Pid; }).Num(delegate (object o) { ProcRow p = (ProcRow)o; return p.Pid == 0 ? "" : p.Pid.ToString(); }));
-            c2.Add(new Col("cpu", "CPU %", 70, delegate (object o) { return ((ProcRow)o).CpuPct; }).Num(delegate (object o) { return ((ProcRow)o).CpuPct.ToString("N1"); }).Colour(delegate (object o) { double v = ((ProcRow)o).CpuPct; return v >= 50 ? Theme.Rose : v >= 15 ? Theme.Amber : Theme.Ink; }));
-            c2.Add(new Col("cput", "CPU time", 80, delegate (object o) { return ((ProcRow)o).CpuCum; }).Num(delegate (object o) { return Fmt.Secs(((ProcRow)o).CpuCum); }));
-            c2.Add(new Col("share", "Share", 70, delegate (object o) { return ((ProcRow)o).Share; }).Num(delegate (object o) { return ((ProcRow)o).Share.ToString("P0"); }).Colour(delegate (object o) { return Theme.Teal; }));
-            c2.Add(new Col("trend", "Trend", 130, delegate (object o) { return Dialogs.Spark(((ProcRow)o).CpuHist, 20); }).Colour(delegate (object o) { return Theme.Teal; }));
-            c2.Add(new Col("mem", "Memory", 90, delegate (object o) { return ((ProcRow)o).MemCur; }).Num(delegate (object o) { return Fmt.Bytes(((ProcRow)o).MemCur); }));
-            c2.Add(new Col("peak", "Peak", 90, delegate (object o) { return ((ProcRow)o).MemPeak; }).Num(delegate (object o) { return Fmt.Bytes(((ProcRow)o).MemPeak); }).Colour(delegate (object o) { return Theme.Dim; }));
-            c2.Add(new Col("ior", "Disk read", 90, delegate (object o) { return ((ProcRow)o).IoCumR; }).Num(delegate (object o) { return Fmt.Bytes(((ProcRow)o).IoCumR); }));
-            c2.Add(new Col("iow", "Disk write", 90, delegate (object o) { return ((ProcRow)o).IoCumW; }).Num(delegate (object o) { return Fmt.Bytes(((ProcRow)o).IoCumW); }));
-            c2.Add(new Col("ion", "I/O now", 90, delegate (object o) { return ((ProcRow)o).IoRate; }).Num(delegate (object o) { return Fmt.Bytes(((ProcRow)o).IoRate) + "/s"; }).Colour(delegate (object o) { return Theme.Blue; }));
-            c2.Add(new Col("state", "", 60, delegate (object o) { return ((ProcRow)o).Alive ? "" : "exited"; }).Colour(delegate (object o) { return Theme.Rose; }));
-            view.SetColumns(c2); view.Dimmed = delegate (object o) { return !((ProcRow)o).Alive; };
-            view.TreePath = delegate (object o) { ProcRow p = (ProcRow)o; return p.Pid == 0 ? new string[] { p.Name } : new string[] { p.Name, p.Name + " [" + p.Pid + "]" }; };
+            view.Apply(Columns.Processes());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "process"); };
             sel.Add("Open file location", false, delegate { foreach (object o in view.Targets) { ProcRow p = (ProcRow)o; if (p.Pid == 0) continue; try { Dialogs.OpenInExplorer(Process.GetProcessById(p.Pid).MainModule.FileName); } catch (Exception ex) { Host.Toast(p.Name + ": " + ex.Message, true); } } });
             sel.Add("Loaded modules…", false, delegate { ProcRow p = null; foreach (object o in view.Targets) { ProcRow r = (ProcRow)o; if (r.Pid > 4) { p = r; break; } } if (p == null) { Host.Toast("Pick a process with a PID (switch off \"group by name\").", true); return; } ModuleViewer.Show(Host, p.Pid, p.Name); });
@@ -566,8 +481,8 @@ namespace PSTools
     // ═══════════════════════════════ 5 · Storage Hogs ═══════════════════════════════
     public class DiskPanel : ToolPanel
     {
-        public override string Title { get { return "Disk Usage"; } }
-        public override string Blurb { get { return "Scan a drive or a folder and see where the space went: the folder tree with sizes, the largest files, the biggest folders, and what kinds of files they are. Open, copy or send the ones you pick to the Recycle Bin."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Storage storage = new Storage(); readonly ComboBox cTarget, cShow; readonly Button bFolder, bScan, bCancel; readonly NumericUpDown nMin; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); readonly System.Windows.Forms.Timer prog = new System.Windows.Forms.Timer(); Thread worker; string customFolder;
         public DiskPanel()
         {
@@ -611,32 +526,15 @@ namespace PSTools
         }
         void ShowRows()
         {
-            if (storage.Root == null) return; view.ExportName = "storage-" + cShow.Text.Replace(' ', '-');
+            if (storage.Root == null) return;
             if (cShow.SelectedIndex == 2)
             {
-                List<Col> c = new List<Col>();
-                c.Add(new Col("ext", "Type", 120, delegate (object o) { return "." + ((ExtStat)o).Ext; }));
-                c.Add(new Col("bytes", "Total size", 120, delegate (object o) { return ((ExtStat)o).Bytes; }).Num(delegate (object o) { return Fmt.Bytes(((ExtStat)o).Bytes); }));
-                c.Add(new Col("share", "Share", 80, delegate (object o) { return ((ExtStat)o).Bytes; }).Num(delegate (object o) { return storage.TotalBytes > 0 ? ((double)((ExtStat)o).Bytes / storage.TotalBytes).ToString("P1") : ""; }).Colour(delegate (object o) { return Theme.Teal; }));
-                c.Add(new Col("count", "Files", 100, delegate (object o) { return ((ExtStat)o).Count; }).Num(delegate (object o) { return ((ExtStat)o).Count.ToString("N0"); }));
-                c.Add(new Col("avg", "Average", 100, delegate (object o) { ExtStat e = (ExtStat)o; return e.Count > 0 ? e.Bytes / e.Count : 0; }).Num(delegate (object o) { ExtStat e = (ExtStat)o; return e.Count > 0 ? Fmt.Bytes((double)e.Bytes / e.Count) : ""; }).Colour(delegate (object o) { return Theme.Dim; }));
-                view.SetColumns(c); view.TreePath = delegate (object o) { return new string[] { "." + ((ExtStat)o).Ext }; }; view.TreeNodeText = null;
+                view.Apply(Columns.DiskTypes(delegate { return storage.TotalBytes; }));
                 List<ExtStat> l = new List<ExtStat>(storage.ByExt.Values); l.Sort(delegate (ExtStat a, ExtStat b) { return b.Bytes.CompareTo(a.Bytes); }); view.SetItems(Boxed(l), false); return;
             }
             bool dirs = cShow.SelectedIndex == 1;
-            List<Col> cols = new List<Col>();
-            cols.Add(new Col("name", dirs ? "Folder" : "File", 260, delegate (object o) { return ((Node)o).Name; }));
-            cols.Add(new Col("size", "Size", 110, delegate (object o) { return ((Node)o).Size; }).Num(delegate (object o) { return Fmt.Bytes(((Node)o).Size); }));
-            cols.Add(new Col("share", "Of parent", 90, delegate (object o) { return ((Node)o).ShareOfParent; }).Num(delegate (object o) { return ((Node)o).ShareOfParent.ToString("P0"); }).Colour(delegate (object o) { return Theme.Teal; }));
-            if (dirs) { cols.Add(new Col("files", "Files", 80, delegate (object o) { return ((Node)o).Files; }).Num(delegate (object o) { return ((Node)o).Files.ToString("N0"); })); cols.Add(new Col("subs", "Folders", 80, delegate (object o) { return ((Node)o).Dirs; }).Num(delegate (object o) { return ((Node)o).Dirs.ToString("N0"); })); cols.Add(new Col("depth", "Depth", 60, delegate (object o) { return ((Node)o).Depth; }).Num(delegate (object o) { return ((Node)o).Depth.ToString(); })); }
-            else cols.Add(new Col("ext", "Type", 70, delegate (object o) { return ((Node)o).Ext; }));
-            cols.Add(new Col("mod", "Modified", 120, delegate (object o) { return ((Node)o).Modified; }));
-            cols.Add(new Col("path", "Path", 500, delegate (object o) { return ((Node)o).Path; }).Colour(delegate (object o) { return Theme.Dim; }));
-            view.SetColumns(cols);
-            view.TreePath = delegate (object o) { Node n = (Node)o; string rel = n.Path.StartsWith(storage.Root.Path, StringComparison.OrdinalIgnoreCase) ? n.Path.Substring(storage.Root.Path.Length) : n.Path; List<string> segs = new List<string>(); segs.Add(storage.Root.Path); foreach (string s in rel.Split('\\')) if (s.Length > 0) segs.Add(s); return segs.ToArray(); };
-            view.TreeNodeText = delegate (string name, List<object> items) { long size = 0; Node exact = null; foreach (object o in items) { Node n = (Node)o; if (dirs) { if (n.Name == name || n.Path == name) { if (exact == null || n.Depth < exact.Depth) exact = n; } } else size += n.Size; } if (dirs && exact != null) return name + "   " + Fmt.Bytes(exact.Size) + "  ·  " + exact.Files.ToString("N0") + " files"; return name + (items.Count > 1 || !dirs ? "   " + Fmt.Bytes(size) + "  (" + items.Count.ToString("N0") + ")" : ""); };
+            view.Apply(Columns.DiskNodes(dirs, delegate { return storage.Root == null ? null : storage.Root.Path; }));
             List<Node> src = dirs ? storage.AllDirs : storage.LargestFiles; view.SetItems(Boxed(src), false);
-            if (dirs && view.View == "grid") { }
         }
         /// <summary>A fabricated drive scan for screenshots.</summary>
         void DemoDisk()
@@ -673,9 +571,9 @@ namespace PSTools
     // ═══════════════════════════════ 6 · Deleted Files Finder ═══════════════════════════════
     public class DeletedPanel : ToolPanel
     {
-        public override string Title { get { return "Deleted Files Finder"; } }
-        public override string Blurb { get { return "What was permanently deleted on each drive and whether it can come back: the NTFS change journal for C:, the directory tables of exFAT externals, shadow copies, and files emptied from the Recycle Bin. Recover the ones you pick to another drive."; } }
-        public override bool NeedsAdmin { get { return true; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
+        public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly FlowLayoutPanel drives = new FlowLayoutPanel(); readonly List<CheckBox> driveBoxes = new List<CheckBox>(); readonly List<DriveInfoRow> driveRows = new List<DriveInfoRow>();
         readonly NumericUpDown nDays, nMin, nMax; readonly TextBox tPath, tExt, tName; readonly StepStrip steps = new StepStrip(); readonly CheckBox cNoise, cShadow, cRecov; readonly ComboBox cSource, cUnit; readonly Button bScan, bCancel; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); readonly Panel binPanel = new Panel(); readonly FlowLayoutPanel binFlow = new FlowLayoutPanel();
         readonly List<DeletedScan> scans = new List<DeletedScan>(); Thread worker; volatile bool cancel;
@@ -699,20 +597,7 @@ namespace PSTools
             binFlow.Dock = DockStyle.Top; binFlow.AutoSize = true; binFlow.BackColor = Theme.Side; binFlow.WrapContents = true;
             binPanel.Controls.Add(binFlow); binPanel.Controls.Add(bt);
             view = NewView("deleted-files");
-            List<Col> c2 = new List<Col>();
-            c2.Add(new Col("when", "When", 120, delegate (object o) { return ((DeletedRow)o).When; }));
-            c2.Add(new Col("type", "Type", 60, delegate (object o) { return ((DeletedRow)o).Type; }).Colour(delegate (object o) { return ((DeletedRow)o).Type == "folder" ? Theme.Amber : Theme.Ink; }));
-            c2.Add(new Col("rec", "Recoverable", 90, delegate (object o) { return ((DeletedRow)o).Recoverable ? "yes" : ""; }).Colour(delegate (object o) { return Theme.Green; }));
-            c2.Add(new Col("path", "Path", 480, delegate (object o) { return ((DeletedRow)o).Path; }));
-            c2.Add(new Col("size", "Size", 90, delegate (object o) { return ((DeletedRow)o).Size; }).Num(delegate (object o) { DeletedRow d = (DeletedRow)o; return d.Source == "exFAT" && d.Type == "file" ? Fmt.Bytes(d.Size) : ""; }));
-            c2.Add(new Col("state", "Data", 130, delegate (object o) { return ((DeletedRow)o).State; }).Colour(delegate (object o) { return Theme.StatusColor(((DeletedRow)o).State); }));
-            c2.Add(new Col("source", "Source", 70, delegate (object o) { return ((DeletedRow)o).Source; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c2.Add(new Col("note", "Note", 260, delegate (object o) { return ((DeletedRow)o).Note; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c2.Add(new Col("times", "×", 40, delegate (object o) { return ((DeletedRow)o).Times; }).Num(delegate (object o) { int t = ((DeletedRow)o).Times; return t > 1 ? t.ToString() : ""; }));
-            c2.Add(new Col("shadow", "Shadow source", 300, delegate (object o) { return ((DeletedRow)o).ShadowSource; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c2.Add(new Col("recto", "Recovered to", 300, delegate (object o) { return ((DeletedRow)o).RecoveredTo; }).Colour(delegate (object o) { return Theme.Green; }));
-            view.SetColumns(c2);
-            view.TreePath = delegate (object o) { DeletedRow d = (DeletedRow)o; List<string> segs = new List<string>(); foreach (string s in d.Path.Split('\\')) if (s.Length > 0) segs.Add(s); return segs.ToArray(); };
+            view.Apply(Columns.Deleted());
             Label lsrc = Theme.Lbl("source", Theme.Dim, Theme.UI); cSource = Theme.Combo(110, "all", "journal", "exFAT"); cRecov = Theme.Toggle("recoverable only", false);
             view.Extra.Controls.Add(lsrc); view.Extra.Controls.Add(cSource); view.Extra.Controls.Add(cRecov); cSource.SelectedIndexChanged += delegate { view.Refilter(); }; cRecov.CheckedChanged += delegate { view.Refilter(); };
             view.Filter = delegate (object o) { DeletedRow d = (DeletedRow)o; if (cSource.SelectedIndex == 1 && d.Source != "journal") return false; if (cSource.SelectedIndex == 2 && d.Source != "exFAT") return false; if (cRecov.Checked && !d.Recoverable) return false; return true; };

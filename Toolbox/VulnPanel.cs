@@ -29,8 +29,8 @@ namespace PSTools
 
     public class VulnPanel : ToolPanel
     {
-        public override string Title { get { return "Vulnerability Management"; } }
-        public override string Blurb { get { return "Which CVEs this machine is exposed to and why: the OS build and installed hotfixes against Microsoft's monthly security releases, installed software against the NVD, and what Windows Update is offering right now. CISA's known-exploited list and EPSS rank the findings; every one shows its evidence."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Button bFind, bMissing, bSoft, bFix, bScan, bCancel, bFeeds, bLog; readonly CheckBox cWua, cMsrc, cNvd, cKev, cEpss; readonly NumericUpDown nMonths; readonly TextBox tKey; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
         readonly Stat sOs = new Stat("OS build"), sReboot = new Stat("reboot"), sCrit = new Stat("critical"), sHigh = new Stat("high"), sKev = new Stat("known exploited"), sMissing = new Stat("missing updates"), sSoft = new Stat("software");
         readonly ComboBox cSev, cStatus, cSource; readonly CheckBox cKevOnly; readonly Label lSev, lStatus, lSource;
@@ -49,7 +49,7 @@ namespace PSTools
             ToolTip tip = new ToolTip(); tip.AutoPopDelay = 12000;
             tip.SetToolTip(cWua, "Ask the Windows Update Agent which updates apply here and are not installed (slow: 20 s to a few minutes), plus the install history."); tip.SetToolTip(cMsrc, "Microsoft's monthly security releases (CVRF): compare the OS build/UBR with each fix's FixedBuild, KB supersedence as fallback."); tip.SetToolTip(cNvd, "Installed software in the product map, looked up on the NVD at the installed version. Without a key: one product every 6.5 s.");
             tip.SetToolTip(cKev, "Flag CVEs in CISA's Known Exploited Vulnerabilities catalogue."); tip.SetToolTip(cEpss, "Exploit Prediction Scoring System: how likely each open CVE is to be exploited in the next 30 days.");
-            Label lm = Theme.Lbl("months", Theme.Dim, Theme.UI); nMonths = Theme.Num(3, 1, 12, 52); tip.SetToolTip(nMonths, "How many monthly MSRC releases to check, newest first. A machine that is a year behind needs 12."); Label lk = Theme.Lbl("NVD key", Theme.Dim, Theme.UI); tKey = Theme.Text("", 130); tKey.UseSystemPasswordChar = true; tip.SetToolTip(tKey, "Optional free NVD API key (nvd.nist.gov/developers/request-an-api-key): 50 requests per 30 s instead of 5. Saved in settings.ini next to the exe.");
+            Label lm = Theme.Lbl("months", Theme.Dim, Theme.UI); nMonths = Theme.Num(3, 1, 12, 52); tip.SetToolTip(nMonths, "The fewest monthly MSRC releases to check, newest first. The scan widens this to the host's patch level automatically (up to 36), so a machine that is a year behind is covered without changing it."); Label lk = Theme.Lbl("NVD key", Theme.Dim, Theme.UI); tKey = Theme.Text("", 130); tKey.UseSystemPasswordChar = true; tip.SetToolTip(tKey, "Optional free NVD API key (nvd.nist.gov/developers/request-an-api-key): 50 requests per 30 s instead of 5. Saved in settings.ini next to the exe.");
             bFeeds = Theme.Btn("Feed cache…", false); bFeeds.Click += delegate { FeedsDialog(); }; bLog = Theme.Btn("Log…", false); bLog.Click += delegate { ShowLog(); };
             Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1;
             foreach (Control c in new Control[] { bFind, bMissing, bSoft, bFix, gap, bScan, bCancel, cWua, cMsrc, cNvd, cKev, cEpss, lm, nMonths, lk, tKey, bFeeds, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
@@ -102,29 +102,28 @@ namespace PSTools
             mode = m;
             foreach (Button b in new Button[] { bFind, bMissing, bSoft, bFix }) { bool on = (b == bFind && m == "findings") || (b == bMissing && m == "missing") || (b == bSoft && m == "software") || (b == bFix && m == "hotfixes"); b.BackColor = on ? Theme.Panel3 : Theme.Panel2; b.ForeColor = on ? Theme.Teal : Theme.Ink; b.FlatAppearance.BorderColor = on ? Theme.Teal : Theme.Line; }
             bool findings = m == "findings"; foreach (Control c in new Control[] { lSev, cSev, lStatus, cStatus, lSource, cSource, cKevOnly }) c.Visible = findings;
-            view.ExportName = findings ? "vulnerability-findings" : m == "missing" ? "missing-updates" : m == "software" ? "installed-software" : "hotfixes";
             sel.Clear();
             if (findings)
             {
-                view.SetColumns(FindingCols()); view.TreePath = delegate (object o) { Finding f = (Finding)o; return new string[] { f.Source, f.Product, f.Cve }; }; view.TreeNodeText = null;
+                view.Apply(Columns.Findings());
                 sel.Add("Copy CVE IDs", true, delegate { CopyLines(delegate (object o) { return ((Finding)o).Cve; }); }); sel.Add("Open advisories", false, delegate { OpenSelected(); });
                 sel.Add("Copy as text", false, delegate { CopyLines(delegate (object o) { Finding f = (Finding)o; return f.Cve + "\t" + f.SeverityNorm + "\t" + (f.Cvss.HasValue ? f.Cvss.Value.ToString("0.0") : "") + "\t" + f.ExploitText + "\t" + f.Status + "\t" + f.Product + "\t" + f.Fix + "\t" + f.Evidence; }); });
                 sel.Add("Send fix KBs to clipboard", false, delegate { CopyLines(delegate (object o) { Finding f = (Finding)o; int i = f.Fix.IndexOf("KB"); return i < 0 ? null : f.Fix.Substring(i).Split(' ')[0]; }); });
             }
             else if (m == "missing")
             {
-                view.SetColumns(MissingCols()); view.TreePath = delegate (object o) { MissingUpdate u = (MissingUpdate)o; return new string[] { u.Kind, u.Title }; };
+                view.Apply(Columns.MissingUpdates());
                 sel.Add("Copy KBs", true, delegate { CopyLines(delegate (object o) { MissingUpdate u = (MissingUpdate)o; return u.Kb.Length > 0 ? "KB" + u.Kb : null; }); }); sel.Add("Copy CVE IDs", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.AddRange(((MissingUpdate)o).Cves); Clip(l); });
                 sel.Add("Open Windows Update", false, delegate { try { Process.Start("ms-settings:windowsupdate"); } catch { } }); sel.Add("Copy titles", false, delegate { CopyLines(delegate (object o) { return ((MissingUpdate)o).Title; }); });
             }
             else if (m == "software")
             {
-                view.SetColumns(SoftwareCols()); view.TreePath = delegate (object o) { Software s = (Software)o; return new string[] { s.Mapped ? "in the product map" : "not mapped", s.Publisher.Length > 0 ? s.Publisher : "(no publisher)", s.Name + " " + s.Version }; };
+                view.Apply(Columns.VulnSoftware());
                 sel.Add("Look up CVEs for selected", true, delegate { Lookup(); }); sel.Add("Copy names", false, delegate { CopyLines(delegate (object o) { Software s = (Software)o; return s.Name + "\t" + s.Version + "\t" + s.Publisher; }); });
             }
             else
             {
-                view.SetColumns(HotfixCols()); view.TreePath = delegate (object o) { Hotfix h = (Hotfix)o; return new string[] { h.Source, "KB" + h.Kb + (h.Title.Length > 0 && h.Source == "WU history" ? " · " + h.Title : "") }; };
+                view.Apply(Columns.Hotfixes());
                 sel.Add("Copy KBs", true, delegate { CopyLines(delegate (object o) { Hotfix h = (Hotfix)o; return h.Kb.Length > 0 ? "KB" + h.Kb : null; }); });
             }
             sel.Add("Export selected", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
@@ -141,64 +140,6 @@ namespace PSTools
             return true;
         }
 
-        List<Col> FindingCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("cve", "CVE", 128, delegate (object o) { return ((Finding)o).Cve; }));
-            c.Add(new Col("sev", "Severity", 78, delegate (object o) { return Resolve.SevRank(((Finding)o).SeverityNorm); }).Num(delegate (object o) { return ((Finding)o).SeverityNorm; }).Colour(delegate (object o) { return Theme.SeverityColor(((Finding)o).SeverityNorm); }));
-            c.Add(new Col("cvss", "CVSS", 56, delegate (object o) { return ((Finding)o).Cvss ?? -1; }).Num(delegate (object o) { Finding f = (Finding)o; return f.Cvss.HasValue ? f.Cvss.Value.ToString("0.0") : ""; }));
-            c.Add(new Col("kev", "Exploited", 112, delegate (object o) { return ((Finding)o).ExploitText; }).Colour(delegate (object o) { return Theme.Rose; }));
-            c.Add(new Col("epss", "EPSS", 62, delegate (object o) { return ((Finding)o).Epss ?? -1; }).Num(delegate (object o) { Finding f = (Finding)o; return f.Epss.HasValue ? (f.Epss.Value * 100).ToString("0.0") + " %" : ""; }));
-            c.Add(new Col("status", "Status", 118, delegate (object o) { return ((Finding)o).Status; }).Colour(delegate (object o) { return Theme.StatusColor(((Finding)o).Status); }));
-            c.Add(new Col("product", "Product", 230, delegate (object o) { return ((Finding)o).Product; }));
-            c.Add(new Col("inst", "Installed", 116, delegate (object o) { return ((Finding)o).Installed; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("fix", "Fix", 210, delegate (object o) { return ((Finding)o).Fix; }).Colour(delegate (object o) { return Theme.Green; }));
-            c.Add(new Col("src", "Source", 104, delegate (object o) { return ((Finding)o).Source; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("title", "Title", 340, delegate (object o) { return ((Finding)o).Title; }));
-            c.Add(new Col("ev", "Evidence", 460, delegate (object o) { return ((Finding)o).Evidence; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("rel", "Release", 76, delegate (object o) { return ((Finding)o).Release; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("due", "KEV due", 90, delegate (object o) { return ((Finding)o).KevDue; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> MissingCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("kb", "KB", 96, delegate (object o) { MissingUpdate u = (MissingUpdate)o; return u.Kb.Length > 0 ? "KB" + u.Kb : ""; }));
-            c.Add(new Col("title", "Title", 430, delegate (object o) { return ((MissingUpdate)o).Title; }));
-            c.Add(new Col("sev", "Severity", 80, delegate (object o) { return Resolve.NormSeverity(((MissingUpdate)o).Severity); }).Colour(delegate (object o) { return Theme.SeverityColor(((MissingUpdate)o).Severity); }));
-            c.Add(new Col("kind", "Kind", 90, delegate (object o) { return ((MissingUpdate)o).Kind; }).Colour(delegate (object o) { string k = ((MissingUpdate)o).Kind; return k == "security" || k == "critical" ? Theme.Amber : Theme.Dim; }));
-            c.Add(new Col("cves", "CVEs", 200, delegate (object o) { return ((MissingUpdate)o).CveText; }));
-            c.Add(new Col("dl", "Downloaded", 90, delegate (object o) { return ((MissingUpdate)o).Downloaded ? "yes" : "no"; }).Colour(delegate (object o) { return ((MissingUpdate)o).Downloaded ? Theme.Green : Theme.Dim; }));
-            c.Add(new Col("size", "Size", 80, delegate (object o) { return ((MissingUpdate)o).SizeBytes; }).Num(delegate (object o) { double s = ((MissingUpdate)o).SizeBytes; return s > 0 ? Fmt.Bytes(s) : ""; }));
-            c.Add(new Col("pub", "Published", 90, delegate (object o) { return ((MissingUpdate)o).PublishedText; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("reboot", "Reboot", 70, delegate (object o) { return ((MissingUpdate)o).Reboot; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("cat", "Categories", 240, delegate (object o) { return ((MissingUpdate)o).Categories; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> SoftwareCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("name", "Program", 290, delegate (object o) { return ((Software)o).Name; }));
-            c.Add(new Col("ver", "Version", 120, delegate (object o) { return ((Software)o).Version; }));
-            c.Add(new Col("cves", "CVEs", 56, delegate (object o) { return ((Software)o).Cves; }).Num(delegate (object o) { int n = ((Software)o).Cves; return n < 0 ? "" : n.ToString(); }).Colour(delegate (object o) { return ((Software)o).Cves > 0 ? Theme.Rose : Theme.Green; }));
-            c.Add(new Col("cpe", "NVD product", 190, delegate (object o) { return ((Software)o).Cpe; }).Colour(delegate (object o) { return Theme.Teal; }));
-            c.Add(new Col("status", "Status", 300, delegate (object o) { return ((Software)o).Status; }).Colour(delegate (object o) { Software s = (Software)o; return s.Cves > 0 ? Theme.Amber : s.Status.StartsWith("lookup failed") ? Theme.Rose : Theme.Dim; }));
-            c.Add(new Col("pub", "Publisher", 190, delegate (object o) { return ((Software)o).Publisher; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("inst", "Installed", 90, delegate (object o) { return ((Software)o).Installed; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("scope", "Scope", 110, delegate (object o) { return ((Software)o).Scope; }).Colour(delegate (object o) { return Theme.Faint; }));
-            return c;
-        }
-        List<Col> HotfixCols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("kb", "KB", 100, delegate (object o) { Hotfix h = (Hotfix)o; return h.Kb.Length > 0 ? "KB" + h.Kb : ""; }));
-            c.Add(new Col("src", "Source", 90, delegate (object o) { return ((Hotfix)o).Source; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("when", "Installed on", 100, delegate (object o) { return ((Hotfix)o).When; }));
-            c.Add(new Col("result", "Result", 130, delegate (object o) { return ((Hotfix)o).Result; }).Colour(delegate (object o) { string r = ((Hotfix)o).Result; return r == "failed" || r == "aborted" ? Theme.Rose : r == "install pending" || r == "superseded" ? Theme.Amber : Theme.Dim; }));
-            c.Add(new Col("desc", "Description", 150, delegate (object o) { return ((Hotfix)o).Description; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("title", "Title", 520, delegate (object o) { return ((Hotfix)o).Title; }));
-            return c;
-        }
 
         // ── data in, data out ──
         void Reload()

@@ -1,4 +1,4 @@
-// Security Checklist panel over Checklist.cs. Runs the pass/fail hardening review, shows each check as a
+﻿// Security Checklist panel over Checklist.cs. Runs the pass/fail hardening review, shows each check as a
 // row grouped by category, scores it, and exports the report as Markdown, JSON or PDF.
 using System;
 using System.Collections.Generic;
@@ -13,9 +13,9 @@ namespace PSTools
 {
     public class ChecklistPanel : ToolPanel
     {
-        public override string Title { get { return "Security Checklist"; } }
-        public override string Blurb { get { return "A pass or fail review of the most common endpoint audit items: default and blank-password accounts, disk encryption, antivirus and EDR products with their state, remote-access and VPN tools, USB control and the firewall. Each check shows its evidence; export the whole report as Markdown, JSON or PDF."; } }
-        public override bool NeedsAdmin { get { return true; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
+        public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly StepStrip steps = new StepStrip();
         readonly Button bRun, bCancel, bActive, bMd, bJson, bPdf, bLog; readonly ComboBox cCat, cStatus; readonly Label lCat, lStatus, status = Theme.Lbl("", Theme.Dim, Theme.UISmall); bool activeRunning;
         readonly Stat sScore = new Stat("score"), sFail = new Stat("fail"), sReview = new Stat("review"), sPass = new Stat("pass"), sNa = new Stat("not checked"), sCats = new Stat("categories"), sElev = new Stat("elevated");
@@ -35,9 +35,7 @@ namespace PSTools
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 7; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sScore, sFail, sReview, sPass, sNa, sCats, sElev }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, s == sScore ? 18 : 13.6f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
             view = NewView("security-checklist");
-            view.SetColumns(Cols());
-            view.RowColor = delegate (object o) { string r = ((CheckItem)o).Status; return r == "fail" ? Theme.Rose : r == "warn" ? Theme.Amber : Theme.Ink; };
-            view.TreePath = delegate (object o) { CheckItem i = (CheckItem)o; return new string[] { i.Category, i.Name }; };
+            view.Apply(Columns.Checklist());
             lCat = Theme.Lbl("category", Theme.Dim, Theme.UI); cCat = Theme.Combo(230, "all categories"); lStatus = Theme.Lbl("show", Theme.Dim, Theme.UI); cStatus = Theme.Combo(150, "everything", "failures & review", "fail only", "review only", "pass only", "info / N/A");
             foreach (Control c in new Control[] { lCat, cCat, lStatus, cStatus }) view.Extra.Controls.Add(c);
             cCat.SelectedIndexChanged += delegate { view.Refilter(); }; cStatus.SelectedIndexChanged += delegate { view.Refilter(); };
@@ -47,19 +45,6 @@ namespace PSTools
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
-        List<Col> Cols()
-        {
-            List<Col> c = new List<Col>();
-            c.Add(new Col("cat", "Category", 200, delegate (object o) { return ((CheckItem)o).Category; }).Colour(delegate (object o) { return Theme.Dim; }));
-            c.Add(new Col("name", "Check", 320, delegate (object o) { return ((CheckItem)o).Name; }));
-            c.Add(new Col("res", "Result", 80, delegate (object o) { return Rank(((CheckItem)o).Status); }).Num(delegate (object o) { return ((CheckItem)o).StatusText; }).Colour(delegate (object o) { return StatusColor(((CheckItem)o).Status); }));
-            c.Add(new Col("detail", "Detail", 420, delegate (object o) { return ((CheckItem)o).Detail; }));
-            c.Add(new Col("ev", "Evidence", 360, delegate (object o) { return ((CheckItem)o).Evidence; }).Colour(delegate (object o) { return Theme.Faint; }));
-            c.Add(new Col("q", "Question", 460, delegate (object o) { return ((CheckItem)o).Question; }).Colour(delegate (object o) { return Theme.Dim; }));
-            return c;
-        }
-        static int Rank(string s) { return s == "fail" ? 0 : s == "warn" ? 1 : s == "na" ? 2 : s == "info" ? 3 : 4; }
-        static Color StatusColor(string s) { return s == "pass" ? Theme.Green : s == "fail" ? Theme.Rose : s == "warn" ? Theme.Amber : s == "na" ? Theme.Faint : Theme.Dim; }
 
         public override void OnShown() { if (loaded) return; loaded = true; scan = new ChecklistScan(); scan.Report.Elevated = Host.IsElevated; try { scan.Report.Os = Inventory.Os().Summary; } catch { } Cards(); status.Text = "not run yet · Run checklist to review this machine"; }
 

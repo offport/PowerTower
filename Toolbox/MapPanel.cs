@@ -247,8 +247,8 @@ namespace PSTools
 
     public class MapPanel : ToolPanel
     {
-        public override string Title { get { return "Findings Map"; } }
-        public override string Blurb { get { return "This machine at the centre of a live force-directed graph, wired to everything the tools found: users, network, software, autoruns, firewall, Wi-Fi, browsers, the security checklist and any vulnerabilities. Drag nodes, scroll to zoom, click to expand."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly GraphView graph = new GraphView(); readonly StepStrip steps = new StepStrip(); readonly Button bBuild, bExpand, bCollapse, bFit, bReformat; readonly CheckBox cDeep; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
         Thread worker; volatile bool building;
 

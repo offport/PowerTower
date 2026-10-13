@@ -9,47 +9,10 @@ namespace PSTools
 {
     public class AboutPanel : ToolPanel
     {
-        public override string Title { get { return "About & Guide"; } }
-        public override string Blurb { get { return "What each tool in this toolbox does, grouped by job. A portable, read-mostly security workbench for this one machine — no installer, no services, no scripts."; } }
+        public override string Title { get { return Tools.Title(GetType().Name); } }
+        public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
 
         readonly Panel page = new Panel();
-
-        // group heading, then {panel class name, tool title, one-line description}…
-        static readonly object[][] Groups = new object[][] {
-            new object[] { "Recon & network", new string[][] {
-                new string[] { "ReconPanel", "System Recon & Audit", "A read-only sweep of the machine — system, users and groups, network, security posture, persistence, processes and recent security events — flagging risky settings. Exports to Markdown, JSON or PDF." },
-                new string[] { "BlockerPanel", "Domain and IP Blocker", "Pull domains and IPs out of any file or paste, then block them via the hosts file and a firewall rule. Backs up the hosts file first; everything is reversible." },
-                new string[] { "ReachPanel", "Reachability Verifier", "For each target: DNS, an optional ping, and a TCP connect to each port you list — to see what is reachable from here." },
-                new string[] { "ConnPanel", "Connections Monitor", "Every live TCP/UDP endpoint, refreshed each second: process, PID, addresses, state and remote host name. Block or copy the remote IPs." },
-                new string[] { "FirewallPanel", "Firewall Rules", "Every Windows Firewall rule, with the risky inbound-allow rules flagged, plus whether the firewall is actually on for each profile." },
-                new string[] { "NetMapPanel", "Network Map", "This machine’s live connections drawn on a world map: every connection to a public address is geolocated (opt-in) and shown as an animated arc, updated in real time." },
-            } },
-            new object[] { "Files & storage", new string[][] {
-                new string[] { "HogsPanel", "Resource Usage", "Which processes have used the most CPU time, memory and disk I/O since you opened the tool — plus, per process, the DLLs it has loaded and which are unsigned." },
-                new string[] { "DiskPanel", "Disk Usage", "Scan a drive or folder to see where the space went: the largest files, the biggest folders, the file types, and the folder tree with sizes." },
-                new string[] { "DeletedPanel", "Deleted Files Finder", "What was permanently deleted on each drive and whether it can come back, read from the NTFS journal and the exFAT directory table. Filter by type, name and size." },
-                new string[] { "FileExplorerPanel", "File Explorer", "Browse the machine, pick files across folders, see each file's signature, and act on the whole selection — including AES-256 encrypt/decrypt and secure wipe." },
-                new string[] { "FindPanel", "Find Files", "Find files anywhere by name (wildcards) or by hash (MD5/SHA-1/SHA-256), with a size cap on the hash sweep." },
-                new string[] { "DupesPanel", "Duplicate Finder", "Find files whose contents are identical and see how much space each group wastes. Keep one copy, recycle the rest." },
-            } },
-            new object[] { "Vulnerabilities & software", new string[][] {
-                new string[] { "VulnPanel", "Vulnerability Management", "Which CVEs this machine is exposed to and why: the OS build and installed software matched against Microsoft's CVRF, the NVD, CISA KEV and EPSS." },
-                new string[] { "SoftwarePanel", "Software Inventory", "Every installed program and its version; scan to flag the vulnerable ones by severity, worst CVE, known-exploited status and the version to upgrade to." },
-            } },
-            new object[] { "Threat hunting & incident response", new string[][] {
-                new string[] { "AutorunsPanel", "Autoruns", "Every place Windows starts a program on its own — run keys, tasks, services, Winlogon, image hijacks, WMI subscriptions — with each program's signer and a risk flag. Disable or delete what you don't want." },
-                new string[] { "EventsPanel", "Event Log Triage", "The security-relevant event-log records over a time range: logons and failures, new services and tasks, PowerShell activity, Defender detections, account changes and cleared logs." },
-                new string[] { "ChecklistPanel", "Security Checklist", "A pass/fail review of the common endpoint audit items — accounts, disk encryption, antivirus and EDR, remote access, USB, firewall — with an EICAR anti-malware test and an application-control policy read." },
-            } },
-            new object[] { "Secrets & credentials", new string[][] {
-                new string[] { "SecretsPanel", "Secrets Scanner", "Search a folder or drive for exposed secrets — keys, tokens and passwords in config files — each shown with a masked preview." },
-                new string[] { "CredsPanel", "Wi-Fi & Credentials", "The secrets saved on this machine: Wi-Fi networks with their security (weak ones flagged) and, when elevated, the key; plus the Windows Credential Manager vault." },
-                new string[] { "BrowserPanel", "Browsing Data", "History, downloads, searches and saved passwords from every browser (Chrome, Edge, Brave, Firefox), read from their databases. Passwords stay masked until you reveal them." },
-            } },
-            new object[] { "Putting it together", new string[][] {
-                new string[] { "MapPanel", "Findings Map", "This machine at the centre of a map, wired to what was found: users, network, software, checklist results and vulnerabilities. Click a node to expand." },
-            } },
-        };
 
         public AboutPanel()
         {
@@ -57,14 +20,15 @@ namespace PSTools
             Controls.Add(page);
             int y = 0; int w = Theme.S(860);
             y = AddIntro(y, w);
-            foreach (object[] grp in Groups)
+            foreach (string grp in Tools.Groups)
             {
+                bool any = false; foreach (ToolInfo ti in Tools.All) if (ti.Group == grp && !ti.CliOnly) any = true; if (!any) continue;   // command-line-only groups have no page here
                 y += Theme.S(14);
-                Label h = Theme.Lbl((string)grp[0], Theme.Teal, Theme.Big); h.Location = new Point(Theme.S(4), y); page.Controls.Add(h); y += Theme.S(30);
+                Label h = Theme.Lbl(grp, Theme.Teal, Theme.Big); h.Location = new Point(Theme.S(4), y); page.Controls.Add(h); y += Theme.S(30);
                 Panel rule = new Panel(); rule.BackColor = Theme.Line; rule.Location = new Point(Theme.S(4), y); rule.Size = new Size(w, 1); page.Controls.Add(rule); y += Theme.S(8);
-                foreach (string[] tool in (string[][])grp[1]) { AboutRow row = new AboutRow(tool[0], tool[1], tool[2], w); row.Location = new Point(0, y); row.Picked += delegate (string key) { Jump(key); }; page.Controls.Add(row); y += row.Height; }
+                foreach (ToolInfo ti in Tools.All) { if (ti.Group != grp || ti.CliOnly) continue; AboutRow row = new AboutRow(ti.Panel, ti.Title, ti.About, w); row.Location = new Point(0, y); row.Picked += delegate (string key) { Jump(key); }; page.Controls.Add(row); y += row.Height; }
             }
-            Label foot = Theme.Lbl("The scripts beside this app are untouched — this is a separate C# port of their logic. Nothing runs through powershell.exe, nothing is installed, and the only network traffic is the vulnerability feeds, each of which can be switched off.", Theme.Dim, Theme.UISmall);
+            Label foot = Theme.Lbl("Self-contained C#: nothing runs through powershell.exe, nothing is installed, and the only network traffic is the vulnerability feeds, each of which can be switched off. Every tool here except the two maps is also available from the command line as PowerTowerCli.exe, with the same names, columns and filters.", Theme.Dim, Theme.UISmall);
             foot.AutoSize = false; foot.Location = new Point(Theme.S(4), y + Theme.S(16)); foot.Size = new Size(w, Theme.S(48)); page.Controls.Add(foot);
         }
 
