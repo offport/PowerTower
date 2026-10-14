@@ -17,7 +17,7 @@ namespace PSTools
         public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly StepStrip steps = new StepStrip();
-        readonly Button bRun, bCancel, bActive, bMd, bJson, bPdf, bLog; readonly ComboBox cCat, cStatus; readonly Label lCat, lStatus, status = Theme.Lbl("", Theme.Dim, Theme.UISmall); bool activeRunning;
+        readonly Button bRun, bCancel, bActive, bSave, bLog; readonly ComboBox cCat, cStatus; readonly Label lCat, lStatus, status = Theme.Lbl("", Theme.Dim, Theme.UISmall); bool activeRunning;
         readonly Stat sScore = new Stat("score"), sFail = new Stat("fail"), sReview = new Stat("review"), sPass = new Stat("pass"), sNa = new Stat("not checked"), sCats = new Stat("categories"), sElev = new Stat("elevated");
         ChecklistScan scan; bool loaded;
 
@@ -25,13 +25,12 @@ namespace PSTools
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            bRun = Theme.Btn("Run checklist", true); bRun.Click += delegate { Run(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) { scan.Cancel = true; Host.Toast("Stopping…", true); } };
-            bMd = Theme.Btn("Save Markdown…", false); bJson = Theme.Btn("Save JSON…", false); bPdf = Theme.Btn("Save PDF…", false); bLog = Theme.Btn("Log…", false);
-            bActive = Theme.Btn("Active tests…", false); bActive.Click += delegate { RunActive(); }; new ToolTip().SetToolTip(bActive, "Run the two active tests: drop the EICAR anti-malware test file to check detection, and try running an unsigned program from each writable folder. Your antivirus and any application-control policy will react on purpose.");
-            bMd.Click += delegate { Save("md"); }; bJson.Click += delegate { Save("json"); }; bPdf.Click += delegate { Save("pdf"); }; bLog.Click += delegate { ShowLog(); };
-            foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = false;
-            Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1;
-            foreach (Control c in new Control[] { bRun, bCancel, bActive, gap, bMd, bJson, bPdf, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
+            bRun = Theme.Btn("Run checklist", true); bRun.Tag = "run"; bRun.Click += delegate { Run(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) { scan.Cancel = true; Host.Toast("Stopping…", true); } };
+            bSave = Theme.MenuBtn("Save report", new string[] { "Markdown (.md)", "JSON (.json)", "PDF (.pdf)" }, delegate (int i) { Save(i == 0 ? "md" : i == 1 ? "json" : "pdf"); }); bLog = Theme.Btn("Log…", false); bLog.Click += delegate { ShowLog(); };
+            bActive = Theme.Caution("Active tests (EICAR)…"); bActive.Click += delegate { RunActive(); }; new ToolTip().SetToolTip(bActive, "Two opt-in tests that touch the machine: write the harmless EICAR test file to your temp folder and check that the antivirus removes it (it will alert - that is the pass), and read the application-control policy. Nothing else is run or dropped. You are asked to confirm first.");
+            bSave.Enabled = false;
+            Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1; Panel gap2 = new Panel(); gap2.Width = Theme.S(14); gap2.Height = 1;
+            foreach (Control c in new Control[] { bRun, bCancel, gap, bSave, bLog, gap2, bActive, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 7; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sScore, sFail, sReview, sPass, sNa, sCats, sElev }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, s == sScore ? 18 : 13.6f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
             view = NewView("security-checklist");
@@ -41,7 +40,7 @@ namespace PSTools
             cCat.SelectedIndexChanged += delegate { view.Refilter(); }; cStatus.SelectedIndexChanged += delegate { view.Refilter(); };
             view.Filter = delegate (object o) { CheckItem i = (CheckItem)o; if (cCat.SelectedIndex > 0 && i.Category != (string)cCat.SelectedItem) return false; switch (cStatus.SelectedIndex) { case 1: if (i.Status != "fail" && i.Status != "warn") return false; break; case 2: if (i.Status != "fail") return false; break; case 3: if (i.Status != "warn") return false; break; case 4: if (i.Status != "pass") return false; break; case 5: if (i.Status != "info" && i.Status != "na") return false; break; } return true; };
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "check"); };
-            sel.Add("Copy as text", true, delegate { CopyText(); }); sel.Add("Export selected", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
+            sel.Add("Copy as text", true, delegate { CopyText(); }); sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
@@ -67,7 +66,7 @@ namespace PSTools
                     Ui(delegate { foreach (CheckItem c in ep) s.Report.Items.Add(c); steps.Set("App control", "done", ep.Count + " check(s)"); Reload(); FillCats(); });
                 }
                 catch (Exception ex) { Ui(delegate { Host.Toast("active tests: " + ex.Message, true); }); }
-                finally { Ui(delegate { activeRunning = false; bActive.Enabled = true; bRun.Enabled = true; foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = true; steps.End("active tests done"); Host.Toast("Active tests done — see the Active Tests category", false); }); }
+                finally { Ui(delegate { activeRunning = false; bActive.Enabled = true; bRun.Enabled = true; bSave.Enabled = true; steps.End("active tests done"); Host.Toast("Active tests done — see the Active Tests category", false); }); }
             });
             t.IsBackground = true; t.Start();
         }
@@ -78,8 +77,8 @@ namespace PSTools
             s.Progress += delegate (string m) { Ui(delegate { status.Text = m; if (scan == s) steps.Say(m); }); };
             s.Step += delegate (string label, string state, string note) { Ui(delegate { if (scan == s) steps.Set(label, state, note); }); };
             s.Phase += delegate { Ui(delegate { if (scan == s) Reload(); }); };
-            s.Finished += delegate { Ui(delegate { if (scan != s) return; bRun.Enabled = true; bCancel.Enabled = false; foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = true; Reload(); FillCats(); steps.End((s.Cancel ? "cancelled · " : "finished · ") + "score " + s.Report.Score + "/100 · " + s.Report.Fail + " fail · " + s.Report.Warn + " review"); Host.Toast("Score " + s.Report.Score + "/100 · " + s.Report.Fail + " fail, " + s.Report.Warn + " to review", s.Report.Fail > 0); }); };
-            bRun.Enabled = false; bCancel.Enabled = true; foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = false; status.Text = "starting…"; view.SetItems(new object[0], false); steps.Begin(ChecklistScan.StepLabels);
+            s.Finished += delegate { Ui(delegate { if (scan != s) return; bRun.Enabled = true; bCancel.Enabled = false; bSave.Enabled = true; Reload(); FillCats(); steps.End((s.Cancel ? "cancelled · " : "finished · ") + "score " + s.Report.Score + "/100 · " + s.Report.Fail + " fail · " + s.Report.Warn + " review"); Host.Toast("Score " + s.Report.Score + "/100 · " + s.Report.Fail + " fail, " + s.Report.Warn + " to review", s.Report.Fail > 0); }); };
+            bRun.Enabled = false; bCancel.Enabled = true; bSave.Enabled = false; status.Text = "starting…"; view.SetItems(new object[0], false); steps.Begin(ChecklistScan.StepLabels);
             if (!Host.IsElevated) Host.Toast("Running without administrator rights: BitLocker and some checks will report N/A.", true);
             s.RunInBackground();
         }
@@ -101,40 +100,14 @@ namespace PSTools
         void Save(string fmt)
         {
             if (scan == null || scan.Report.Items.Count == 0) { Host.Toast("Run the checklist first.", true); return; }
-            string filter = fmt == "md" ? "Markdown (*.md)|*.md" : fmt == "json" ? "JSON (*.json)|*.json" : "PDF (*.pdf)|*.pdf";
-            using (SaveFileDialog d = new SaveFileDialog())
-            {
-                d.Filter = filter + "|All files|*.*"; d.FileName = scan.Report.FileStem + "." + fmt; d.Title = "Save the checklist as " + fmt.ToUpperInvariant();
-                if (d.ShowDialog(this) != DialogResult.OK) return;
-                try
-                {
-                    if (fmt == "md") File.WriteAllText(d.FileName, scan.Report.ToMarkdown(), new UTF8Encoding(true));
-                    else if (fmt == "json") File.WriteAllText(d.FileName, scan.Report.ToJson(), new UTF8Encoding(false));
-                    else scan.Report.SavePdf(d.FileName);
-                    Host.Toast("Saved " + Path.GetFileName(d.FileName), false);
-                    if (Host.Confirm("Report saved", "Saved to:\n" + d.FileName + "\n\nOpen it now?")) { try { Process.Start(d.FileName); } catch { Dialogs.OpenInExplorer(d.FileName); } }
-                }
-                catch (Exception ex) { Host.Error("Save failed", ex.Message); }
-            }
+            Common.SaveReport(Host, this, "checklist", scan.Report.FileStem, fmt, delegate (string f, string path) { if (f == "md") File.WriteAllText(path, scan.Report.ToMarkdown(), new UTF8Encoding(true)); else if (f == "json") File.WriteAllText(path, scan.Report.ToJson(), new UTF8Encoding(false)); else scan.Report.SavePdf(path); });
         }
         void CopyText()
         {
             List<string> l = new List<string>(); foreach (object o in view.Targets) { CheckItem i = (CheckItem)o; l.Add(i.StatusText + "\t" + i.Category + "\t" + i.Name + "\t" + i.Detail + (i.Evidence.Length > 0 ? "\t" + i.Evidence : "")); }
             if (l.Count == 0) { Host.Toast("Nothing selected.", true); return; } try { Clipboard.SetText(string.Join("\r\n", l.ToArray())); Host.Toast(l.Count + " check(s) copied", false); } catch (Exception ex) { Host.Toast("clipboard: " + ex.Message, true); }
         }
-        void ShowLog()
-        {
-            using (Form f = new Form())
-            {
-                f.Text = "Checklist log"; f.BackColor = Theme.Panel; f.ForeColor = Theme.Ink; f.Font = Theme.UI; f.Width = Theme.S(760); f.Height = Theme.S(480); f.StartPosition = FormStartPosition.CenterParent; f.MinimizeBox = false;
-                TextBox t = new TextBox(); t.Multiline = true; t.ReadOnly = true; t.Dock = DockStyle.Fill; t.BackColor = Theme.Panel2; t.ForeColor = Theme.Ink; t.Font = Theme.Mono; t.ScrollBars = ScrollBars.Both; t.WordWrap = false; t.BorderStyle = BorderStyle.FixedSingle;
-                StringBuilder sb = new StringBuilder(); if (scan == null || scan.Log.Count == 0) sb.AppendLine("No run yet."); else { if (scan.Errors.Count > 0) { sb.AppendLine("LIMITED / UNAVAILABLE"); foreach (string e in scan.Errors) sb.AppendLine("  " + e); sb.AppendLine(); } sb.AppendLine("LOG"); foreach (string s in scan.LogSnapshot()) sb.AppendLine("  " + s); } t.Text = sb.ToString();
-                FlowLayoutPanel bbar = new FlowLayoutPanel(); bbar.Dock = DockStyle.Bottom; bbar.Height = Theme.S(46); bbar.FlowDirection = FlowDirection.RightToLeft; bbar.Padding = new Padding(Theme.S(10), Theme.S(8), Theme.S(10), 0); bbar.BackColor = Theme.Panel;
-                Button close = Theme.Btn("Close", true); close.DialogResult = DialogResult.Cancel; bbar.Controls.Add(close);
-                Panel body = new Panel(); body.Dock = DockStyle.Fill; body.Padding = new Padding(Theme.S(10), Theme.S(10), Theme.S(10), 0); body.Controls.Add(t);
-                f.Controls.Add(body); f.Controls.Add(bbar); body.BringToFront(); f.CancelButton = close; f.ShowDialog(this);
-            }
-        }
+        void ShowLog() { Common.LogWindow(this, "Checklist log", scan == null || scan.Log.Count == 0 ? "No run yet." : Common.LogText(scan.Errors, scan.LogSnapshot(), "LIMITED / UNAVAILABLE", "No run yet.")); }
 
         public override void SelfTest(StringBuilder r)
         {
@@ -165,7 +138,7 @@ namespace PSTools
             A("Peripheral & USB Control", "USB mass storage", "Are USB ports and external storage controlled to prevent data theft and malware?", "warn", "USB mass storage is allowed", "USBSTOR Start=3");
             A("Firewall & Updates", "Windows Firewall", "Is the firewall on for every profile?", "fail", "3 profile(s) off", "off: Domain, Private, Public");
             A("Firewall & Updates", "Pending reboot", "Is the machine free of a pending reboot?", "warn", "a reboot is pending — updates may not be fully applied", "PendingFileRenameOperations");
-            s.FinishedAt = DateTime.Now; scan = s; Reload(); FillCats(); foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = true;
+            s.FinishedAt = DateTime.Now; scan = s; Reload(); FillCats(); bSave.Enabled = true;
             steps.Begin(ChecklistScan.StepLabels); foreach (string l in ChecklistScan.StepLabels) steps.Set(l, "done", null); steps.End("finished · score " + r.Score + "/100 · " + r.Fail + " fail · " + r.Warn + " review");
             status.Text = "done · score " + r.Score + "/100";
         }

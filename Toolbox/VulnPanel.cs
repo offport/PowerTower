@@ -44,7 +44,7 @@ namespace PSTools
             FlowLayoutPanel bar = Theme.Bar(46);
             bFind = Theme.Btn("Findings", false); bMissing = Theme.Btn("Missing updates", false); bSoft = Theme.Btn("Software", false); bFix = Theme.Btn("Hotfixes", false);
             bFind.Click += delegate { SetMode("findings"); }; bMissing.Click += delegate { SetMode("missing"); }; bSoft.Click += delegate { SetMode("software"); }; bFix.Click += delegate { SetMode("hotfixes"); };
-            bScan = Theme.Btn("Scan this machine", true); bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) { scan.Cancel = true; Host.Toast("Stopping after the current step…", true); } };
+            bScan = Theme.Btn("Scan this machine", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) { scan.Cancel = true; Host.Toast("Stopping after the current step…", true); } };
             cWua = Theme.Toggle("Windows Update", true); cMsrc = Theme.Toggle("Microsoft CVEs", true); cNvd = Theme.Toggle("third-party (NVD)", true); cKev = Theme.Toggle("KEV", true); cEpss = Theme.Toggle("EPSS", true);
             ToolTip tip = new ToolTip(); tip.AutoPopDelay = 12000;
             tip.SetToolTip(cWua, "Ask the Windows Update Agent which updates apply here and are not installed (slow: 20 s to a few minutes), plus the install history."); tip.SetToolTip(cMsrc, "Microsoft's monthly security releases (CVRF): compare the OS build/UBR with each fix's FixedBuild, KB supersedence as fallback."); tip.SetToolTip(cNvd, "Installed software in the product map, looked up on the NVD at the installed version. Without a key: one product every 6.5 s.");
@@ -88,12 +88,7 @@ namespace PSTools
         {
             Settings st = Host.Settings; st.Set("vuln.key", tKey.Text.Trim()); st.Set("vuln.months", ((int)nMonths.Value).ToString()); st.Set("vuln.wua", cWua.Checked ? "1" : "0"); st.Set("vuln.msrc", cMsrc.Checked ? "1" : "0"); st.Set("vuln.nvd", cNvd.Checked ? "1" : "0"); st.Set("vuln.kev", cKev.Checked ? "1" : "0"); st.Set("vuln.epss", cEpss.Checked ? "1" : "0"); st.Save();
         }
-        static FeedCache OpenCache()
-        {
-            string local = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "cache");
-            try { Directory.CreateDirectory(local); string probe = Path.Combine(local, ".write-test"); File.WriteAllText(probe, "ok"); File.Delete(probe); return new FeedCache(local); }
-            catch { return new FeedCache(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PowerTower", "cache")); }
-        }
+        static FeedCache OpenCache() { return Common.OpenFeedCache(); }
 
         // ── modes ──
         string Noun() { return mode == "findings" ? "finding" : mode == "missing" ? "update" : mode == "software" ? "program" : "hotfix"; }
@@ -108,7 +103,7 @@ namespace PSTools
                 view.Apply(Columns.Findings());
                 sel.Add("Copy CVE IDs", true, delegate { CopyLines(delegate (object o) { return ((Finding)o).Cve; }); }); sel.Add("Open advisories", false, delegate { OpenSelected(); });
                 sel.Add("Copy as text", false, delegate { CopyLines(delegate (object o) { Finding f = (Finding)o; return f.Cve + "\t" + f.SeverityNorm + "\t" + (f.Cvss.HasValue ? f.Cvss.Value.ToString("0.0") : "") + "\t" + f.ExploitText + "\t" + f.Status + "\t" + f.Product + "\t" + f.Fix + "\t" + f.Evidence; }); });
-                sel.Add("Send fix KBs to clipboard", false, delegate { CopyLines(delegate (object o) { Finding f = (Finding)o; int i = f.Fix.IndexOf("KB"); return i < 0 ? null : f.Fix.Substring(i).Split(' ')[0]; }); });
+                sel.Add("Copy fix KBs", false, delegate { CopyLines(delegate (object o) { Finding f = (Finding)o; int i = f.Fix.IndexOf("KB"); return i < 0 ? null : f.Fix.Substring(i).Split(' ')[0]; }); });
             }
             else if (m == "missing")
             {
@@ -119,14 +114,14 @@ namespace PSTools
             else if (m == "software")
             {
                 view.Apply(Columns.VulnSoftware());
-                sel.Add("Look up CVEs for selected", true, delegate { Lookup(); }); sel.Add("Copy names", false, delegate { CopyLines(delegate (object o) { Software s = (Software)o; return s.Name + "\t" + s.Version + "\t" + s.Publisher; }); });
+                sel.Add("Look up CVEs for selected", true, delegate { Lookup(); }); sel.Add("Copy names and versions", false, delegate { CopyLines(delegate (object o) { Software s = (Software)o; return s.Name + "\t" + s.Version + "\t" + s.Publisher; }); });
             }
             else
             {
                 view.Apply(Columns.Hotfixes());
                 sel.Add("Copy KBs", true, delegate { CopyLines(delegate (object o) { Hotfix h = (Hotfix)o; return h.Kb.Length > 0 ? "KB" + h.Kb : null; }); });
             }
-            sel.Add("Export selected", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
+            sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
             Reload();
         }
         bool FilterRow(object o)
@@ -229,21 +224,7 @@ namespace PSTools
                 f.Controls.Add(body); f.Controls.Add(l); f.Controls.Add(bar); body.BringToFront(); f.CancelButton = close; f.ShowDialog(this);
             }
         }
-        void ShowLog()
-        {
-            using (Form f = new Form())
-            {
-                f.Text = "Scan log"; f.BackColor = Theme.Panel; f.ForeColor = Theme.Ink; f.Font = Theme.UI; f.Width = Theme.S(820); f.Height = Theme.S(520); f.StartPosition = FormStartPosition.CenterParent; f.MinimizeBox = false;
-                TextBox t = new TextBox(); t.Multiline = true; t.ReadOnly = true; t.Dock = DockStyle.Fill; t.BackColor = Theme.Panel2; t.ForeColor = Theme.Ink; t.Font = Theme.Mono; t.ScrollBars = ScrollBars.Both; t.WordWrap = false; t.BorderStyle = BorderStyle.FixedSingle;
-                StringBuilder sb = new StringBuilder();
-                if (scan == null || scan.Log.Count == 0) sb.AppendLine("No scan yet."); else { if (scan.Errors.Count > 0) { sb.AppendLine("PROBLEMS"); foreach (string e in scan.Errors) sb.AppendLine("  " + e); sb.AppendLine(); } sb.AppendLine("LOG"); foreach (string s in scan.LogSnapshot()) sb.AppendLine("  " + s); if (scan.Releases.Count > 0) sb.AppendLine().Append("MSRC releases checked: " + string.Join(", ", scan.Releases.ToArray())); }
-                t.Text = sb.ToString();
-                FlowLayoutPanel bar = new FlowLayoutPanel(); bar.Dock = DockStyle.Bottom; bar.Height = Theme.S(46); bar.FlowDirection = FlowDirection.RightToLeft; bar.Padding = new Padding(Theme.S(10), Theme.S(8), Theme.S(10), 0); bar.BackColor = Theme.Panel;
-                Button close = Theme.Btn("Close", true), copy = Theme.Btn("Copy", false); close.DialogResult = DialogResult.Cancel; copy.Click += delegate { try { Clipboard.SetText(t.Text); } catch { } }; bar.Controls.Add(close); bar.Controls.Add(copy);
-                Panel body = new Panel(); body.Dock = DockStyle.Fill; body.Padding = new Padding(Theme.S(10), Theme.S(10), Theme.S(10), 0); body.Controls.Add(t);
-                f.Controls.Add(body); f.Controls.Add(bar); body.BringToFront(); f.CancelButton = close; f.ShowDialog(this);
-            }
-        }
+        void ShowLog() { Common.LogWindow(this, "Scan log", scan == null || scan.Log.Count == 0 ? "No scan yet." : Common.LogText(scan.Errors, scan.LogSnapshot(), "PROBLEMS", "No scan yet.") + (scan.Releases.Count > 0 ? "\r\nMSRC releases checked: " + string.Join(", ", scan.Releases.ToArray()) : "")); }
 
         // ── self-test and screenshots ──
         /// <summary>Switches through every mode with a cell highlighted (the path that used to crash) and exercises the view in each.</summary>

@@ -27,8 +27,8 @@ namespace PSTools
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            bScan = Theme.Btn("Scan", true); bScan.Click += delegate { Scan(); };
-            bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; };
+            bScan = Theme.Btn("Scan autoruns", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(); };
+            bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; };
             foreach (Control c in new Control[] { bScan, bCancel, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sTotal, sRisk, sUnsigned, sMissing, sKinds }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
@@ -39,12 +39,13 @@ namespace PSTools
             lKind = Theme.Lbl("kind", Theme.Dim, Theme.UI); cKind = Theme.Combo(150, "all kinds"); cRisky = Theme.Toggle("risky only", false); cUnsigned = Theme.Toggle("unsigned only", false); cNonMs = Theme.Toggle("non-Microsoft only", false);
             foreach (Control c in new Control[] { lKind, cKind, cRisky, cUnsigned, cNonMs }) view.Extra.Controls.Add(c);
             cKind.SelectedIndexChanged += delegate { view.Refilter(); }; cRisky.CheckedChanged += delegate { view.Refilter(); }; cUnsigned.CheckedChanged += delegate { view.Refilter(); }; cNonMs.CheckedChanged += delegate { view.Refilter(); };
-            sel.Add("Disable", true, delegate { Act("disable"); });
-            sel.Add("Enable", false, delegate { Act("enable"); });
-            sel.AddDanger("Delete…", delegate { Act("delete"); });
-            sel.Add("Open file location", false, delegate { int k = 0; foreach (object o in view.Targets) { AutorunEntry e = (AutorunEntry)o; if (e.Image.Length > 0 && k++ < 8) Dialogs.OpenInExplorer(System.IO.Path.GetDirectoryName(e.Image)); } });
+            // read-only actions first; the ones that change the machine sit behind the separator, reversible in amber, destructive in rose
+            sel.Add("Open location", true, delegate { int k = 0; foreach (object o in view.Targets) { AutorunEntry e = (AutorunEntry)o; if (e.Image.Length > 0 && k++ < 8) Dialogs.OpenInExplorer(System.IO.Path.GetDirectoryName(e.Image)); } });
             sel.Add("Copy commands", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.Add(((AutorunEntry)o).Command); Clip(l); });
-            sel.Add("Export", false, delegate { view.Export(); });
+            sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Separator();
+            sel.AddCaution("Disable…", delegate { Act("disable"); });
+            sel.AddCaution("Enable…", delegate { Act("enable"); });
+            sel.AddDanger("Delete…", delegate { Act("delete"); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
@@ -102,6 +103,7 @@ namespace PSTools
             List<AutorunEntry> t = new List<AutorunEntry>(); foreach (object o in view.Targets) t.Add((AutorunEntry)o);
             if (t.Count == 0) { Host.Toast("Tick some entries first.", true); return; }
             if (Host.NeedAdmin(what == "delete" ? "Deleting an autostart entry" : (what == "disable" ? "Disabling" : "Enabling") + " an autostart entry")) return;
+            if (what != "delete" && !Host.Confirm((what == "disable" ? "Disable " : "Enable ") + t.Count + " autostart entr" + (t.Count == 1 ? "y" : "ies") + "?", (what == "disable" ? "They will no longer start with Windows. This is reversible: tick them again and choose Enable." : "They will start with Windows again.") + "\n\n" + string.Join("\n", t.ConvertAll(delegate (AutorunEntry e) { return "\u2022 " + e.Kind + ": " + e.Name; }).ToArray()))) return;
             if (what == "delete") { List<string> names = new List<string>(); foreach (AutorunEntry e in t) names.Add("• " + e.Kind + ": " + e.Name); if (!Host.Confirm("Delete " + t.Count + " entry(ies)?", "This permanently removes them so they no longer start automatically:\n\n" + string.Join("\n", names.GetRange(0, Math.Min(15, names.Count)).ToArray()) + (names.Count > 15 ? "\n… and " + (names.Count - 15) + " more" : "") + "\n\nServices and tasks it runs are removed; the program files themselves are left on disk.")) return; }
             int ok = 0, fail = 0; List<string> errs = new List<string>();
             foreach (AutorunEntry e in t) { string err = what == "delete" ? Autoruns.Delete(e) : Autoruns.SetEnabled(e, what == "enable"); if (err == null) ok++; else { fail++; if (errs.Count < 4) errs.Add(e.Name + ": " + err); } }

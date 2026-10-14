@@ -1,4 +1,4 @@
-﻿// Entry point. Flags: --tool <PanelClassName>  --selftest <report.txt>  --shots <folder>
+﻿// Entry point. Flags: --tool <PanelClassName>  --selftest <report.txt>  --shots <folder>  --demo  --theme "<name>"  (the tool list comes from Tools.All)
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -33,7 +33,7 @@ namespace PSTools
             if (shots != null) DemoMode = true;   // --shots only makes sense on the fabricated demo data (without it the run hung for minutes and wrote nothing)
             Settings pre = new Settings(Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "settings.ini")); Theme.Apply(theme ?? pre.Get("theme", Theme.Names[0]));
             List<ToolPanel> tools = new List<ToolPanel>();
-            tools.Add(new ReconPanel()); tools.Add(new BlockerPanel()); tools.Add(new ReachPanel()); tools.Add(new ConnPanel()); tools.Add(new NetMapPanel()); tools.Add(new FirewallPanel()); tools.Add(new HogsPanel()); tools.Add(new DiskPanel()); tools.Add(new DeletedPanel()); tools.Add(new FileExplorerPanel()); tools.Add(new FindPanel()); tools.Add(new DupesPanel()); tools.Add(new VulnPanel()); tools.Add(new SoftwarePanel()); tools.Add(new AutorunsPanel()); tools.Add(new EventsPanel()); tools.Add(new ChecklistPanel()); tools.Add(new SecretsPanel()); tools.Add(new CredsPanel()); tools.Add(new BrowserPanel()); tools.Add(new MapPanel()); tools.Add(new AboutPanel());
+            foreach (ToolInfo t in Tools.All) { if (t.CliOnly) continue; Type pt = Type.GetType("PSTools." + t.Panel); if (pt == null) continue; ToolPanel p = (ToolPanel)Activator.CreateInstance(pt); if (t.Key == "about") tools.Insert(0, p); else tools.Add(p); }   // the registry is the one source of the order; Home comes first
             Shell shell = new Shell(tools, tool); shell.SelfTestFile = selfTest; shell.ShotDir = shots;
             Application.Run(shell);
         }

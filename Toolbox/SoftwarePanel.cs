@@ -29,7 +29,7 @@ namespace PSTools
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
             bRefresh = Theme.Btn("Refresh list", false); bRefresh.Click += delegate { LoadList(); };
-            bScan = Theme.Btn("Scan for CVEs", true); bScan.Click += delegate { Scan(null); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; Host.Toast("Stopping…", true); };
+            bScan = Theme.Btn("Scan for CVEs", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(null); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; Host.Toast("Stopping…", true); };
             Label lk = Theme.Lbl("NVD key", Theme.Dim, Theme.UI); tKey = Theme.Text("", 130); tKey.UseSystemPasswordChar = true; new ToolTip().SetToolTip(tKey, "Optional free NVD API key (nvd.nist.gov) — 50 requests per 30 s instead of 5, so the scan is far faster. Shared with Vulnerability Management.");
             cKev = Theme.Toggle("KEV", true); cEpss = Theme.Toggle("EPSS", true);
             foreach (Control c in new Control[] { bRefresh, bScan, bCancel, lk, tKey, cKev, cEpss, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
@@ -44,10 +44,10 @@ namespace PSTools
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "program"); };
             view.Activated += delegate (object o) { Software s = (Software)o; if (s.WorstCve.Length > 0) Open("https://nvd.nist.gov/vuln/detail/" + s.WorstCve); else if (s.Mapped) Open("https://nvd.nist.gov/products/cpe/search/results?keyword=" + Uri.EscapeDataString(s.Vendor + " " + s.Product)); };
             sel.Add("Scan selected", true, delegate { List<Software> l = new List<Software>(); foreach (object o in view.Targets) l.Add((Software)o); Scan(l); });
-            sel.Add("Copy CVE list", false, delegate { CopyCves(); });
-            sel.Add("Copy names + versions", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { Software s = (Software)o; l.Add(s.Name + "\t" + s.Version + "\t" + s.Publisher); } Clip(l); });
+            sel.Add("Copy CVE IDs", false, delegate { CopyCves(); });
+            sel.Add("Copy names and versions", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { Software s = (Software)o; l.Add(s.Name + "\t" + s.Version + "\t" + s.Publisher); } Clip(l); });
             sel.Add("Open on NVD", false, delegate { int k = 0; foreach (object o in view.Targets) { if (k++ >= 6) break; Software s = (Software)o; if (s.WorstCve.Length > 0) Open("https://nvd.nist.gov/vuln/detail/" + s.WorstCve); } });
-            sel.Add("Export", false, delegate { view.Export(); });
+            sel.Add("Export selected…", false, delegate { view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
@@ -68,12 +68,7 @@ namespace PSTools
             if (loaded) return; loaded = true; tKey.Text = Host.Settings.Get("vuln.key", ""); cache = OpenCache();
             if (items.Count == 0) LoadList();
         }
-        static FeedCache OpenCache()
-        {
-            string local = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "cache");
-            try { Directory.CreateDirectory(local); string probe = Path.Combine(local, ".write-test"); File.WriteAllText(probe, "ok"); File.Delete(probe); return new FeedCache(local); }
-            catch { return new FeedCache(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PowerTower", "cache")); }
-        }
+        static FeedCache OpenCache() { return Common.OpenFeedCache(); }
         void LoadList()
         {
             try { items.Clear(); items.AddRange(Inventory.Installed()); vulns.Clear(); view.SetItems(Boxed(items), false); Cards(); status.Text = items.Count + " program(s) installed — Scan for CVEs to flag the vulnerable ones"; }

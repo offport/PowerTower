@@ -27,7 +27,7 @@ namespace PSTools
             BackColor = Theme.Bg;
             FlowLayoutPanel bar = Theme.Bar(46); bar.BackColor = Theme.Bg;
             bStart = Theme.Btn("Pause", true); bStart.Click += delegate { if (poll.Enabled) { poll.Stop(); map.Animate(false); bStart.Text = "Resume"; } else { poll.Start(); map.Animate(true); bStart.Text = "Pause"; } };
-            bGeo = Theme.Btn("Enable geolocation…", false); bGeo.Click += delegate { EnableGeo(); };
+            bGeo = Theme.Caution("Enable geolocation…"); bGeo.Click += delegate { EnableGeo(); };
             cUdp = Theme.Toggle("include UDP", false); cUdp.CheckedChanged += delegate { Tick(); };
             Button bFit = Theme.Btn("Fit", false); bFit.Click += delegate { map.Fit(); };
             foreach (Control c in new Control[] { bStart, bGeo, cUdp, bFit, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);

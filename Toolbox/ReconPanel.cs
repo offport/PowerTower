@@ -17,7 +17,7 @@ namespace PSTools
         public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         public override bool NeedsAdmin { get { return Tools.Admin(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar();
-        readonly Button bRun, bCancel, bMd, bJson, bPdf, bLog; readonly CheckBox cEvents, cRiskOnly; readonly ComboBox cSection; readonly Label lSection, status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
+        readonly Button bRun, bCancel, bSave, bLog; readonly CheckBox cEvents, cRiskOnly; readonly ComboBox cSection; readonly Label lSection, status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
         readonly Stat sOs = new Stat("OS"), sElev = new Stat("elevated"), sSecs = new Stat("sections"), sFacts = new Stat("facts"), sReview = new Stat("to review"), sRisk = new Stat("risks"), sProc = new Stat("processes");
         ReconScan scan; bool loaded; readonly StepStrip steps = new StepStrip();
 
@@ -25,13 +25,12 @@ namespace PSTools
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            bRun = Theme.Btn("Run audit", true); bRun.Click += delegate { Run(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) { scan.Cancel = true; Host.Toast("Stopping after the current step…", true); } };
+            bRun = Theme.Btn("Run audit", true); bRun.Tag = "run"; bRun.Click += delegate { Run(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) { scan.Cancel = true; Host.Toast("Stopping after the current step…", true); } };
             cEvents = Theme.Toggle("recent event logs", true); ToolTip tip = new ToolTip(); tip.AutoPopDelay = 12000; tip.SetToolTip(cEvents, "Read the Security, System and PowerShell logs (failed logons, new services, script blocks). The Security log needs administrator rights.");
-            bMd = Theme.Btn("Save Markdown…", false); bJson = Theme.Btn("Save JSON…", false); bPdf = Theme.Btn("Save PDF…", false); bLog = Theme.Btn("Log…", false);
-            bMd.Click += delegate { Save("md"); }; bJson.Click += delegate { Save("json"); }; bPdf.Click += delegate { Save("pdf"); }; bLog.Click += delegate { ShowLog(); };
-            foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = false;
+            bSave = Theme.MenuBtn("Save report", new string[] { "Markdown (.md)", "JSON (.json)", "PDF (.pdf)" }, delegate (int i) { Save(i == 0 ? "md" : i == 1 ? "json" : "pdf"); }); bLog = Theme.Btn("Log…", false); bLog.Click += delegate { ShowLog(); };
+            bSave.Enabled = false;
             Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1;
-            foreach (Control c in new Control[] { bRun, bCancel, cEvents, gap, bMd, bJson, bPdf, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
+            foreach (Control c in new Control[] { bRun, bCancel, cEvents, gap, bSave, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             // summary strip
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 7; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sOs, sElev, sSecs, sFacts, sReview, sRisk, sProc }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, s == sOs ? 24 : s == sElev ? 14 : 12.4f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
@@ -44,7 +43,7 @@ namespace PSTools
             view.Filter = delegate (object o) { ReconItem i = (ReconItem)o; if (cSection.SelectedIndex > 0 && i.Section != (string)cSection.SelectedItem) return false; if (cRiskOnly.Checked && i.Risk != "warn" && i.Risk != "bad") return false; return true; };
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "fact"); };
             view.Activated += delegate (object o) { ReconItem i = (ReconItem)o; string p = ExtractPath(i.Value); if (p != null) Dialogs.OpenInExplorer(p); };
-            sel.Add("Copy as text", true, delegate { CopyText(); }); sel.Add("Export selected", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
+            sel.Add("Copy as text", true, delegate { CopyText(); }); sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
@@ -64,8 +63,8 @@ namespace PSTools
             s.Progress += delegate (string m) { Ui(delegate { status.Text = m; if (scan == s) steps.Say(m); }); };
             s.Step += delegate (string label, string state, string note) { Ui(delegate { if (scan == s) steps.Set(label, state, note); }); };
             s.Phase += delegate { Ui(delegate { Reload(); }); };
-            s.Finished += delegate { Ui(delegate { bRun.Enabled = true; bCancel.Enabled = false; foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = true; Reload(); FillSections(); steps.End((s.Cancel ? "cancelled · " : "finished · ") + s.Report.Items.Count + " facts · " + s.Report.Bad + " risk · " + s.Report.Warn + " to review"); Host.Toast(scan.Report.Bad + " risk · " + scan.Report.Warn + " to review · " + scan.Report.Items.Count + " facts" + (scan.Errors.Count > 0 ? " · " + scan.Errors.Count + " section(s) limited - see Log…" : ""), scan.Report.Bad > 0); }); };
-            bRun.Enabled = false; bCancel.Enabled = true; foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = false; status.Text = "starting…"; view.SetItems(new object[0], false); steps.Begin(ReconScan.StepLabels);
+            s.Finished += delegate { Ui(delegate { bRun.Enabled = true; bCancel.Enabled = false; bSave.Enabled = true; Reload(); FillSections(); steps.End((s.Cancel ? "cancelled · " : "finished · ") + s.Report.Items.Count + " facts · " + s.Report.Bad + " risk · " + s.Report.Warn + " to review"); Host.Toast(scan.Report.Bad + " risk · " + scan.Report.Warn + " to review · " + scan.Report.Items.Count + " facts" + (scan.Errors.Count > 0 ? " · " + scan.Errors.Count + " section(s) limited - see Log…" : ""), scan.Report.Bad > 0); }); };
+            bRun.Enabled = false; bCancel.Enabled = true; bSave.Enabled = false; status.Text = "starting…"; view.SetItems(new object[0], false); steps.Begin(ReconScan.StepLabels);
             if (!Host.IsElevated) Host.Toast("Running without administrator rights: the Security event log, BitLocker and some settings will be limited.", true);
             scan.RunInBackground();
         }
@@ -87,42 +86,14 @@ namespace PSTools
         void Save(string fmt)
         {
             if (scan == null || scan.Report.Items.Count == 0) { Host.Toast("Run the audit first.", true); return; }
-            string ext = fmt, filter = fmt == "md" ? "Markdown (*.md)|*.md" : fmt == "json" ? "JSON (*.json)|*.json" : "PDF (*.pdf)|*.pdf";
-            using (SaveFileDialog d = new SaveFileDialog())
-            {
-                d.Filter = filter + "|All files|*.*"; d.FileName = scan.Report.FileStem + "." + ext; d.Title = "Save the recon report as " + fmt.ToUpperInvariant();
-                if (d.ShowDialog(this) != DialogResult.OK) return;
-                try
-                {
-                    if (fmt == "md") File.WriteAllText(d.FileName, scan.Report.ToMarkdown(), new UTF8Encoding(true));
-                    else if (fmt == "json") File.WriteAllText(d.FileName, scan.Report.ToJson(), new UTF8Encoding(false));
-                    else scan.Report.SavePdf(d.FileName);
-                    Host.Toast("Saved " + Path.GetFileName(d.FileName), false);
-                    if (Host.Confirm("Report saved", "Saved to:\n" + d.FileName + "\n\nOpen it now?")) { try { Process.Start(d.FileName); } catch { Dialogs.OpenInExplorer(d.FileName); } }
-                }
-                catch (Exception ex) { Host.Error("Save failed", ex.Message); }
-            }
+            Common.SaveReport(Host, this, "recon report", scan.Report.FileStem, fmt, delegate (string f, string path) { if (f == "md") File.WriteAllText(path, scan.Report.ToMarkdown(), new UTF8Encoding(true)); else if (f == "json") File.WriteAllText(path, scan.Report.ToJson(), new UTF8Encoding(false)); else scan.Report.SavePdf(path); });
         }
         void CopyText()
         {
             List<string> l = new List<string>(); foreach (object o in view.Targets) { ReconItem i = (ReconItem)o; l.Add(i.Section + " | " + i.Group + " | " + i.Name + " | " + i.Value + (i.Note.Length > 0 ? " | " + i.Note : "")); }
             if (l.Count == 0) { Host.Toast("Nothing selected.", true); return; } try { Clipboard.SetText(string.Join("\r\n", l.ToArray())); Host.Toast(l.Count + " fact(s) copied", false); } catch (Exception ex) { Host.Toast("clipboard: " + ex.Message, true); }
         }
-        void ShowLog()
-        {
-            using (Form f = new Form())
-            {
-                f.Text = "Audit log"; f.BackColor = Theme.Panel; f.ForeColor = Theme.Ink; f.Font = Theme.UI; f.Width = Theme.S(820); f.Height = Theme.S(520); f.StartPosition = FormStartPosition.CenterParent; f.MinimizeBox = false;
-                TextBox t = new TextBox(); t.Multiline = true; t.ReadOnly = true; t.Dock = DockStyle.Fill; t.BackColor = Theme.Panel2; t.ForeColor = Theme.Ink; t.Font = Theme.Mono; t.ScrollBars = ScrollBars.Both; t.WordWrap = false; t.BorderStyle = BorderStyle.FixedSingle;
-                StringBuilder sb = new StringBuilder();
-                if (scan == null || scan.Log.Count == 0) sb.AppendLine("No audit yet."); else { if (scan.Errors.Count > 0) { sb.AppendLine("LIMITED / UNAVAILABLE"); foreach (string e in scan.Errors) sb.AppendLine("  " + e); sb.AppendLine(); } sb.AppendLine("LOG"); foreach (string s in scan.LogSnapshot()) sb.AppendLine("  " + s); }
-                t.Text = sb.ToString();
-                FlowLayoutPanel bar = new FlowLayoutPanel(); bar.Dock = DockStyle.Bottom; bar.Height = Theme.S(46); bar.FlowDirection = FlowDirection.RightToLeft; bar.Padding = new Padding(Theme.S(10), Theme.S(8), Theme.S(10), 0); bar.BackColor = Theme.Panel;
-                Button close = Theme.Btn("Close", true), copy = Theme.Btn("Copy", false); close.DialogResult = DialogResult.Cancel; copy.Click += delegate { try { Clipboard.SetText(t.Text); } catch { } }; bar.Controls.Add(close); bar.Controls.Add(copy);
-                Panel body = new Panel(); body.Dock = DockStyle.Fill; body.Padding = new Padding(Theme.S(10), Theme.S(10), Theme.S(10), 0); body.Controls.Add(t);
-                f.Controls.Add(body); f.Controls.Add(bar); body.BringToFront(); f.CancelButton = close; f.ShowDialog(this);
-            }
-        }
+        void ShowLog() { Common.LogWindow(this, "Audit log", scan == null || scan.Log.Count == 0 ? "No audit yet." : Common.LogText(scan.Errors, scan.LogSnapshot(), "LIMITED / UNAVAILABLE", "No audit yet.")); }
 
         // ── self-test and screenshots ──
         public override void SelfTest(StringBuilder r)
@@ -172,7 +143,7 @@ namespace PSTools
             A("7. Recent Security Events", "Failed Logons (4625)", "2026-09-14 03:22:10", "An account failed to log on · Account Name: admin · Source Network Address: 203.0.113.9", "", "warn"); A("7. Recent Security Events", "Failed Logons (4625)", "2026-09-14 03:22:07", "An account failed to log on · Account Name: administrator · Source Network Address: 203.0.113.9", "", "warn");
             A("7. Recent Security Events", "New Services Installed (7045)", "2026-08-13 09:12:44", "A service was installed in the system · Service Name: TailscaleService", "", ""); A("7. Recent Security Events", "PowerShell Script Block (4104)", "2026-09-13 21:40:02", "Creating Scriptblock text: Get-Process | Sort CPU", "", "");
             r.When = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"); r.Host = "WORKSTATION-01"; s.FinishedAt = DateTime.Now; scan = s;
-            Reload(); FillSections(); foreach (Button b in new Button[] { bMd, bJson, bPdf }) b.Enabled = true; status.Text = "done · 42 facts, 3 risk, 8 to review, in 3.4 s";
+            Reload(); FillSections(); bSave.Enabled = true; status.Text = "done · 42 facts, 3 risk, 8 to review, in 3.4 s";
             steps.Begin(ReconScan.StepLabels); foreach (string l in ReconScan.StepLabels) steps.Set(l, "done", null); steps.End("finished · 42 facts · 3 risk · 8 to review");
             view.AddRule("section", "does not contain", "6.", false); view.AddRule("value", "is not empty", "", false); view.OpenFilterBar();
         }

@@ -28,8 +28,8 @@ namespace PSTools
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            bScan = Theme.Btn("Collect", true); bScan.Click += delegate { Scan(); };
-            bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; };
+            bScan = Theme.Btn("Collect events", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(); };
+            bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; };
             Label lr = Theme.Lbl("since", Theme.Dim, Theme.UI); cRange = Theme.Combo(120, "last hour", "last 24 hours", "last 7 days", "last 30 days"); cRange.SelectedIndex = 1;
             Label lm = Theme.Lbl("max each", Theme.Dim, Theme.UI); cMax = Theme.Combo(90, "50", "100", "250", "500"); cMax.SelectedIndex = 1;
             foreach (Control c in new Control[] { bScan, bCancel, lr, cRange, lm, cMax, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
@@ -41,8 +41,8 @@ namespace PSTools
             lCat = Theme.Lbl("category", Theme.Dim, Theme.UI); cCat = Theme.Combo(200, "all categories"); cRisky = Theme.Toggle("risky only", false);
             foreach (Control c in new Control[] { lCat, cCat, cRisky }) view.Extra.Controls.Add(c);
             cCat.SelectedIndexChanged += delegate { view.Refilter(); }; cRisky.CheckedChanged += delegate { view.Refilter(); };
-            sel.Add("Copy details", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { EventRow e = (EventRow)o; l.Add(e.When + "\t" + e.Category + "\t" + e.Id + "\t" + e.Who + "\t" + e.Detail); } Clip(l); });
-            sel.Add("Export", false, delegate { view.Export(); });
+            sel.Add("Copy details", true, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { EventRow e = (EventRow)o; l.Add(e.When + "\t" + e.Category + "\t" + e.Id + "\t" + e.Who + "\t" + e.Detail); } Clip(l); });
+            sel.Add("Export selected…", false, delegate { view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 

@@ -28,14 +28,14 @@ namespace PSTools
             FlowLayoutPanel bar = Theme.Bar(46);
             bWifi = Theme.Btn("Wi-Fi networks", true); bWifi.Click += delegate { SetMode("wifi"); };
             bVault = Theme.Btn("Credential vault", false); bVault.Click += delegate { SetMode("vault"); };
-            bReveal = Theme.Btn("Reveal secrets…", false); bReveal.Click += delegate { Reveal(); };
+            bReveal = Theme.Caution("Reveal secrets…"); bReveal.Click += delegate { if (revealed) HideSecrets(); else Reveal(); };
             foreach (Control c in new Control[] { bWifi, bVault, bReveal, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sCount, sWeak, sOpen, sVault, sReveal }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
             view = NewView("wifi-credentials");
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, mode == "wifi" ? "network" : "credential"); };
-            sel.Add("Copy", false, delegate { Copy(); });
-            sel.Add("Export", false, delegate { view.Export(); });
+            sel.Add("Copy", true, delegate { if (Guard()) Copy(); });
+            sel.Add("Export selected…", false, delegate { if (Guard()) view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(bar); view.BringToFront();
         }
 
@@ -43,7 +43,6 @@ namespace PSTools
         {
             mode = m;
             foreach (Button b in new Button[] { bWifi, bVault }) { bool on = (b == bWifi && m == "wifi") || (b == bVault && m == "vault"); b.BackColor = on ? Theme.Panel3 : Theme.Panel2; b.ForeColor = on ? Theme.Teal : Theme.Ink; b.FlatAppearance.BorderColor = on ? Theme.Teal : Theme.Line; }
-            bReveal.Text = m == "wifi" ? "Reveal Wi-Fi keys…" : "Reveal stored secrets…";
             if (m == "wifi") { view.Apply(Columns.Wifi(delegate { return revealed; })); view.SetItems(Boxed(wifi), false); }
             else { view.Apply(Columns.Vault(delegate { return revealed; })); view.SetItems(Boxed(vault), false); }
             Cards();
@@ -75,6 +74,9 @@ namespace PSTools
             });
             worker.IsBackground = true; worker.Start();
         }
+        /// <summary>Masks the secrets again (the rows keep their data; the columns stop showing it).</summary>
+        void HideSecrets() { revealed = false; SetMode(mode); Host.Toast("Secrets hidden again.", false); }
+        bool Guard() { return !revealed || Host.Confirm("Include the revealed secrets?", "The secrets are on screen in clear text, so the copy or export will contain them.\n\nContinue?"); }
         void Reveal()
         {
             string msg = mode == "wifi"
@@ -92,6 +94,7 @@ namespace PSTools
             sOpen.Set(open.ToString(), "unencrypted", open > 0 ? Theme.Rose : Theme.Ink);
             sVault.Set(vault.Count.ToString(), "in the vault", Theme.Ink);
             sReveal.Set(revealed ? shown.ToString() : "—", revealed ? "in the clear" : "hidden", revealed ? Theme.Amber : Theme.Dim);
+            bReveal.Text = revealed ? "Hide secrets" : (mode == "wifi" ? "Reveal Wi-Fi keys…" : "Reveal stored secrets…");
         }
         void Copy()
         {

@@ -25,7 +25,7 @@ namespace PSTools
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            bScan = Theme.Btn("Refresh", true); bScan.Click += delegate { Scan(); };
+            bScan = Theme.Btn("Read rules", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(); };
             foreach (Control c in new Control[] { bScan, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sTotal, sEnabled, sInbound, sRisky, sFw }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
@@ -35,8 +35,8 @@ namespace PSTools
             lDir = Theme.Lbl("direction", Theme.Dim, Theme.UI); cDir = Theme.Combo(110, "all", "inbound", "outbound"); cRisky = Theme.Toggle("risky only", false); cEnabledOnly = Theme.Toggle("enabled only", false);
             foreach (Control c in new Control[] { lDir, cDir, cRisky, cEnabledOnly }) view.Extra.Controls.Add(c);
             cDir.SelectedIndexChanged += delegate { view.Refilter(); }; cRisky.CheckedChanged += delegate { view.Refilter(); }; cEnabledOnly.CheckedChanged += delegate { view.Refilter(); };
-            sel.Add("Copy rules", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { FwRule f = (FwRule)o; l.Add(f.Name + "\t" + f.Direction + "\t" + f.Action + "\t" + f.Protocol + "\t" + f.LocalPorts + "\t" + f.Program); } Clip(l); });
-            sel.Add("Export", false, delegate { view.Export(); });
+            sel.Add("Copy rules", true, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { FwRule f = (FwRule)o; l.Add(f.Name + "\t" + f.Direction + "\t" + f.Action + "\t" + f.Protocol + "\t" + f.LocalPorts + "\t" + f.Program); } Clip(l); });
+            sel.Add("Export selected…", false, delegate { view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 

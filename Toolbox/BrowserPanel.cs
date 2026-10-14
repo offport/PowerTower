@@ -39,7 +39,7 @@ namespace PSTools
             lProfile = Theme.Lbl("browser", Theme.Dim, Theme.UI); cProfile = Theme.Combo(200, "all browsers"); cProfile.SelectedIndexChanged += delegate { if (loaded) LoadData(false); };
             Label lm = Theme.Lbl("max", Theme.Dim, Theme.UI); cMax = Theme.Combo(100, "1,000", "5,000", "20,000", "all"); cMax.SelectedIndex = 1;
             bRefresh = Theme.Btn("Refresh", false); bRefresh.Click += delegate { LoadData(false); };
-            bReveal = Theme.Btn("Reveal passwords…", false); bReveal.Click += delegate { Reveal(); }; bReveal.Visible = false;
+            bReveal = Theme.Caution("Reveal passwords…"); bReveal.Click += delegate { if (revealed) HideSecrets(); else Reveal(); }; bReveal.Visible = false;
             foreach (Control c in new Control[] { bHist, bDomains, bDown, bSearch, bPass, lProfile, cProfile, lm, cMax, bRefresh, bReveal, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sRecords, sBrowsers, sDomains, sTop, sExtra }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
@@ -52,7 +52,7 @@ namespace PSTools
             sel.Add("Open", true, delegate { int k = 0; foreach (object o in view.Targets) { if (k++ >= 8) break; string url = RowUrl(o); if (url.Length == 0) { string d = RowDomain(o); if (d.Length > 0) url = "https://" + d; } if (url.Length > 0) Open(url); } });
             sel.Add("Copy URLs", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.Add(RowUrl(o)); Clip(l); });
             sel.Add("Copy domains", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { string d = RowDomain(o); if (d.Length > 0) l.Add(d); } Clip(Dedupe(l)); });
-            sel.Add("Export", false, delegate { view.Export(); });
+            sel.Add("Export selected…", false, delegate { if (!revealed || mode != "passwords" || Host.Confirm("Include the revealed passwords?", "The passwords are on screen in clear text, so the export will contain them.\n\nContinue?")) view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
@@ -135,6 +135,8 @@ namespace PSTools
             });
             worker.IsBackground = true; worker.Start();
         }
+        /// <summary>Masks the passwords again by re-reading them without decryption.</summary>
+        void HideSecrets() { revealed = false; bReveal.Text = "Reveal passwords…"; if (mode == "passwords") LoadData(false); Host.Toast("Passwords hidden again.", false); }
         void Reveal()
         {
             if (mode != "passwords") { SetMode("passwords"); }
@@ -154,7 +156,7 @@ namespace PSTools
                 sRecords.Set(logins.Count.ToString(), "saved logins", Theme.Ink);
                 sBrowsers.Set(browsers.Count.ToString(), "browsers", Theme.Ink);
                 sDomains.Set(Domains(null).ToString(), "sites", Theme.Ink);
-                sTop.Set(revealed ? dec.ToString() : "—", revealed ? "decrypted" : "hidden", revealed ? Theme.Amber : Theme.Dim);
+                sTop.Set(revealed ? dec.ToString() : "—", revealed ? "decrypted" : "hidden", revealed ? Theme.Amber : Theme.Dim); bReveal.Text = revealed ? "Hide passwords" : "Reveal passwords…";
                 sExtra.Set(weak.ToString(), "weak (<8 chars)", weak > 0 ? Theme.Rose : Theme.Ink);
                 return;
             }

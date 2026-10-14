@@ -76,10 +76,11 @@ namespace PSTools
             view.Activated += delegate (object o) { FileEntry f = (FileEntry)o; if (f.IsDir) Navigate(f.Path); else if (f.Encrypted) DecryptFiles(new List<FileEntry> { f }); else Open(f.Path); };
             split.Panel2.Controls.Add(view);
             sel.Add("Open", true, delegate { foreach (object o in view.Targets) { FileEntry f = (FileEntry)o; if (f.IsDir) { Navigate(f.Path); break; } Open(f.Path); } });
-            sel.Add("Copy path(s)", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.Add(((FileEntry)o).Path); if (l.Count > 0) { try { Clipboard.SetText(string.Join("\r\n", l.ToArray())); Host.Toast(l.Count + " path(s) copied", false); } catch { } } });
-            sel.Add("Encrypt…", false, delegate { EncryptFiles(Selected(false)); });
-            sel.Add("Decrypt…", false, delegate { DecryptFiles(Selected(true)); });
-            sel.Add("Export list", false, delegate { view.Export(); });
+            sel.Add("Copy paths", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.Add(((FileEntry)o).Path); if (l.Count > 0) { try { Clipboard.SetText(string.Join("\r\n", l.ToArray())); Host.Toast(l.Count + " path(s) copied", false); } catch { } } });
+            sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Separator();
+            // reversible changes in amber, then the two that cannot be undone in rose, last
+            sel.AddCaution("Encrypt…", delegate { EncryptFiles(Selected(false)); });
+            sel.AddCaution("Decrypt…", delegate { DecryptFiles(Selected(true)); }); sel.Separator();
             sel.AddDanger("Permanent delete…", delegate { DeleteForever(SelectedAny()); });
             sel.AddDanger("Secure wipe…", delegate { SecureWipe(SelectedAny()); });
             Controls.Add(split); Controls.Add(sel); Controls.Add(bar); split.BringToFront();
@@ -106,6 +107,8 @@ namespace PSTools
             }
         }
         void Navigate(string path) { Navigate(path, true); }
+        /// <summary>Jump to a folder from another tool (Find Files hands its matches over here).</summary>
+        public void GoTo(string path) { Navigate(path, true); }
         void Navigate(string path, bool fromList)
         {
             if (string.IsNullOrEmpty(path)) return;
@@ -273,7 +276,7 @@ namespace PSTools
         public override string Title { get { return Tools.Title(GetType().Name); } }
         public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar();
-        readonly Button bName, bHash, bGo, bCancel, bRoot, bPasteHash, bLoadHash; readonly TextBox tName, tHash; readonly Label tHashInfo; readonly CheckBox cCase, cSkipWin; readonly NumericUpDown nMax; readonly ComboBox cRoots; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall), lName, lHash, lMax, lmb, lRoot;
+        readonly Button bName, bHash, bGo, bCancel, bPasteHash, bLoadHash; readonly TextBox tName, tHash; readonly Label tHashInfo; readonly CheckBox cCase, cSkipWin; readonly NumericUpDown nMax; readonly ComboBox cRoots; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall), lName, lHash, lMax, lmb, lRoot;
         readonly StepStrip steps = new StepStrip(); string mode = "name"; FastWalk walk; Thread worker; volatile bool busy; readonly List<object> pending = new List<object>(); readonly object plock = new object(); readonly System.Windows.Forms.Timer flush = new System.Windows.Forms.Timer(); int found; string customRoot;
 
         public FindPanel()
@@ -282,7 +285,7 @@ namespace PSTools
             FlowLayoutPanel bar = Theme.Bar(46);
             bName = Theme.Btn("By name", false); bHash = Theme.Btn("By hash", false); bName.Click += delegate { SetMode("name"); }; bHash.Click += delegate { SetMode("hash"); };
             lName = Theme.Lbl("name", Theme.Dim, Theme.UI); tName = Theme.Text("", 200); tName.KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { Go(); e.SuppressKeyPress = true; } };
-            lHash = Theme.Lbl("hashes", Theme.Dim, Theme.UI); tHash = Theme.Text("", 240); bPasteHash = Theme.Btn("Paste list…", false); bPasteHash.Click += delegate { string t = Dialogs.PasteText(this, "Paste hashes", "Paste anything — a plain list, CSV, log line, or a threat-intel report. Every MD5, SHA-1 and SHA-256 in it is pulled out automatically, of any type."); if (t != null) { AddHashText(t, "paste"); } };
+            lHash = Theme.Lbl("hashes", Theme.Dim, Theme.UI); tHash = Theme.Text("", 240); bPasteHash = Theme.Btn("Paste…", false); bPasteHash.Click += delegate { string t = Dialogs.PasteText(this, "Paste hashes", "Paste anything — a plain list, CSV, log line, or a threat-intel report. Every MD5, SHA-1 and SHA-256 in it is pulled out automatically, of any type."); if (t != null) { AddHashText(t, "paste"); } };
             bLoadHash = Theme.Btn("Add from file…", false); new ToolTip().SetToolTip(bLoadHash, "Load hashes from any text file — a plain list, CSV, log or threat-intel report. Every MD5, SHA-1 and SHA-256 in it is pulled out automatically, of any type, wherever it appears.");
             bLoadHash.Click += delegate {
                 string f = Dialogs.PickFile(this, "File of hashes (any text: list, CSV, log, IOC report)", "Text & lists (*.txt;*.csv;*.log;*.json;*.ioc;*.md)|*.txt;*.csv;*.log;*.json;*.ioc;*.md|All files (*.*)|*.*");
@@ -296,16 +299,15 @@ namespace PSTools
             lMax = Theme.Lbl("max file", Theme.Dim, Theme.UI); nMax = Theme.Num(100, 1, 100000, 70); lmb = Theme.Lbl("MB", Theme.Dim, Theme.UI); new ToolTip().SetToolTip(nMax, "Files larger than this are skipped when hashing, so the sweep stays fast. Raise it if you expect large matches.");
             cCase = Theme.Toggle("match case", false); cSkipWin = Theme.Toggle("skip Windows folder", true);
             lRoot = Theme.Lbl("in", Theme.Dim, Theme.UI); cRoots = Theme.Combo(220, "all fixed drives"); foreach (string d in FastWalk.FixedDrives()) cRoots.Items.Add(d); cRoots.Items.Add("Folder…"); cRoots.SelectedIndexChanged += delegate { if (cRoots.SelectedItem as string == "Folder…") { string f = Dialogs.PickFolder(this, "Folder to search", null); if (f != null) { customRoot = f; if (!cRoots.Items.Contains(f)) cRoots.Items.Insert(cRoots.Items.Count - 1, f); cRoots.SelectedItem = f; } else cRoots.SelectedIndex = 0; } };
-            bRoot = Theme.Btn("Folder…", false); bRoot.Visible = false;
-            bGo = Theme.Btn("Search", true); bGo.Click += delegate { Go(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { if (walk != null) walk.Stop(); };
+            bGo = Theme.Btn("Search", true); bGo.Tag = "run"; bGo.Click += delegate { Go(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { if (walk != null) walk.Stop(); };
             foreach (Control c in new Control[] { bName, bHash, lName, tName, lHash, tHash, bPasteHash, bLoadHash, tHashInfo, lMax, nMax, lmb, cCase, cSkipWin, lRoot, cRoots, bGo, bCancel, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             view = NewView("find");
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, mode == "hash" ? "match" : "file"); };
             view.Activated += delegate (object o) { string p = o is HashHit ? ((HashHit)o).Path : ((FileEntry)o).Path; Dialogs.OpenInExplorer(p); };
             sel.Add("Open location", true, delegate { int k = 0; foreach (object o in view.Targets) { if (k++ >= 8) break; Dialogs.OpenInExplorer(o is HashHit ? ((HashHit)o).Path : ((FileEntry)o).Path); } });
             sel.Add("Copy paths", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.Add(o is HashHit ? ((HashHit)o).Path : ((FileEntry)o).Path); if (l.Count > 0) { try { Clipboard.SetText(string.Join("\r\n", l.ToArray())); Host.Toast(l.Count + " path(s) copied", false); } catch { } } });
-            sel.Add("Send to File Explorer", false, delegate { object o = view.Current; if (o != null) { string p = o is HashHit ? ((HashHit)o).Path : ((FileEntry)o).Path; Host.ShowTool<FileExplorerPanel>(delegate (FileExplorerPanel fe) { fe.GetType(); }); Dialogs.OpenInExplorer(p); } });
-            sel.Add("Export results", false, delegate { view.Export(); });
+            sel.Add("Show in File Explorer", false, delegate { object o = view.Current; if (o != null) { string p = o is HashHit ? ((HashHit)o).Path : ((FileEntry)o).Path; string dir = System.IO.Path.GetDirectoryName(p); Host.ShowTool<FileExplorerPanel>(delegate (FileExplorerPanel fe) { fe.GoTo(dir); }); } });
+            sel.Add("Export selected…", false, delegate { view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
             flush.Interval = 250; flush.Tick += delegate { FlushPending(); };
             SetMode("name");

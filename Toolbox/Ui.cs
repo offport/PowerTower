@@ -92,7 +92,19 @@ namespace PSTools
             b.AutoSize = true; b.AutoSizeMode = AutoSizeMode.GrowAndShrink; b.Padding = new Padding(S(10), S(4), S(10), S(4)); b.MinimumSize = new Size(0, S(30)); b.Margin = new Padding(0, 0, S(6), S(6));
             return b;
         }
-        public static Button Danger(string text) { Button b = Btn(text, false); b.ForeColor = Rose; b.FlatAppearance.BorderColor = DangerBorder; return b; }
+        /// <summary>A button for something destructive or irreversible: delete, wipe, kill. Rose. Sits last in its bar.</summary>
+        public static Button Danger(string text) { Button b = Btn(text, false); b.ForeColor = Rose; b.FlatAppearance.BorderColor = DangerBorder; b.Tag = "danger"; return b; }
+        /// <summary>A button for something that changes the machine but can be undone, or shows a secret: block, disable, recycle, encrypt, reveal. Amber, so it reads as "careful", never as the default.</summary>
+        public static Button Caution(string text) { Button b = Btn(text, false); b.ForeColor = Amber; b.FlatAppearance.BorderColor = Amber; b.Tag = "caution"; return b; }
+        /// <summary>A button that drops a small menu under itself: one "Save report" instead of three Save buttons.</summary>
+        public static Button MenuBtn(string text, string[] items, Action<int> pick)
+        {
+            Button b = Btn(text + "  \u25be", false); ContextMenuStrip m = new ContextMenuStrip(); m.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors()); m.BackColor = Panel2; m.ForeColor = Ink; m.Font = UI; m.ShowImageMargin = false;
+            for (int i = 0; i < items.Length; i++) { int k = i; ToolStripMenuItem it = new ToolStripMenuItem(items[i]); it.ForeColor = Ink; it.Click += delegate { pick(k); }; m.Items.Add(it); }
+            b.Click += delegate { m.Show(b, new Point(0, b.Height)); }; return b;
+        }
+        /// <summary>Styles a button as a mode tab (Findings / Missing updates / …): lit when it is the current mode.</summary>
+        public static void SetTab(Button b, bool on) { b.BackColor = on ? Panel3 : Panel2; b.ForeColor = on ? Teal : Ink; b.FlatAppearance.BorderColor = on ? Teal : Line; }
         public static CheckBox Toggle(string text, bool on) { CheckBox c = new CheckBox(); c.Text = text; c.Checked = on; c.ForeColor = Ink; c.Font = UI; c.AutoSize = true; c.Cursor = Cursors.Hand; c.Margin = new Padding(0, S(6), S(12), 0); return c; }
         public static TextBox Text(string value, int width) { TextBox t = new TextBox(); t.Text = value; t.BackColor = Panel2; t.ForeColor = Ink; t.BorderStyle = BorderStyle.FixedSingle; t.Font = UI; t.Width = S(width); t.Margin = new Padding(0, S(3), S(8), 0); return t; }
         public static ComboBox Combo(int width, params string[] items) { ComboBox c = new ComboBox(); c.DropDownStyle = ComboBoxStyle.DropDownList; c.Items.AddRange(items); if (items.Length > 0) c.SelectedIndex = 0; c.BackColor = Panel2; c.ForeColor = Ink; c.FlatStyle = FlatStyle.Flat; c.Font = UI; c.Width = S(width); c.Margin = new Padding(0, S(3), S(8), 0); return c; }
@@ -281,6 +293,8 @@ namespace PSTools
             }
         }
         /// <summary>Writes the ticked rows, or every shown row, as CSV. Returns the row count.</summary>
+        /// <summary>Puts the caret in the search box (Ctrl+F).</summary>
+        public void FocusSearch() { try { search.Focus(); search.SelectAll(); } catch { } }
         public int ExportTo(string path) { List<object> what = SelectedItems.Count > 0 ? SelectedItems : new List<object>(rows); Csv.Write(path, Cols, what); return what.Count; }
         // filters and search, also used by the self-test
         public IList<FilterRule> Rules { get { return rules; } }
@@ -582,6 +596,9 @@ namespace PSTools
         public SelectionBar() { Dock = DockStyle.Bottom; AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink; MinimumSize = new Size(0, Theme.S(44)); BackColor = Theme.SelBar; Padding = new Padding(Theme.S(10), Theme.S(6), Theme.S(10), 0); Visible = false; flow.Dock = DockStyle.Top; flow.AutoSize = true; flow.AutoSizeMode = AutoSizeMode.GrowAndShrink; flow.WrapContents = true; flow.BackColor = Color.Transparent; lbl.Margin = new Padding(0, Theme.S(7), Theme.S(16), 0); flow.Controls.Add(lbl); Controls.Add(flow); }
         public Button Add(string text, bool primary, EventHandler onClick) { Button b = primary ? Theme.Btn(text, true) : Theme.Btn(text, false); b.Click += onClick; flow.Controls.Add(b); return b; }
         public Button AddDanger(string text, EventHandler onClick) { Button b = Theme.Danger(text); b.Click += onClick; flow.Controls.Add(b); return b; }
+        public Button AddCaution(string text, EventHandler onClick) { Button b = Theme.Caution(text); b.Click += onClick; flow.Controls.Add(b); return b; }
+        /// <summary>A small gap: the read-only actions on the left of it, the ones that change the machine on the right.</summary>
+        public void Separator() { Panel p = new Panel(); p.Width = Theme.S(14); p.Height = 1; p.Margin = new Padding(0); flow.Controls.Add(p); }
         /// <summary>Removes every action button (keeps the count label) so a panel can swap actions per mode.</summary>
         public void Clear() { for (int i = flow.Controls.Count - 1; i >= 1; i--) flow.Controls.RemoveAt(i); }
         public void Update(int count, string noun) { Visible = count > 0; lbl.Text = count.ToString("N0") + " " + noun + (count == 1 ? "" : "s") + " selected"; }
@@ -653,8 +670,8 @@ namespace PSTools
 
     public class Shell : Form
     {
-        public readonly bool IsElevated; public readonly Settings Settings; readonly Panel side = new Panel(), head = new Panel(), host = new Panel(); readonly Label hTitle = Theme.Lbl("", Theme.Ink, Theme.Title), hBlurb = Theme.Lbl("", Theme.Dim, Theme.UI), hAdmin = Theme.Lbl("", Theme.Amber, Theme.UISmall), toast = Theme.Lbl("", Theme.Teal, Theme.UI);
-        readonly Panel hIcon = new Panel(); string iconKey = ""; readonly List<SideItem> items = new List<SideItem>(); readonly List<ToolPanel> panels = new List<ToolPanel>(); ToolPanel current; public string ShotDir, SelfTestFile; readonly System.Windows.Forms.Timer toastTimer = new System.Windows.Forms.Timer();
+        public readonly bool IsElevated; public readonly Settings Settings; readonly Panel side = new Panel(), head = new Panel(), host = new Panel(), list = new Panel(); readonly List<Control> sideRows = new List<Control>(); readonly Label hTitle = Theme.Lbl("", Theme.Ink, Theme.Title), hBlurb = Theme.Lbl("", Theme.Dim, Theme.UI), hAdmin = Theme.Lbl("", Theme.Amber, Theme.UISmall), toast = Theme.Lbl("", Theme.Teal, Theme.UI);
+        readonly Panel hIcon = new Panel(); string iconKey = ""; readonly List<SideItem> items = new List<SideItem>(); readonly List<SideHeader> headers = new List<SideHeader>(); readonly Panel statusBar = new Panel(); readonly Label sLeft = Theme.Lbl("", Theme.Dim, Theme.UISmall), sRight = Theme.Lbl("", Theme.Faint, Theme.UISmall); readonly List<ToolPanel> panels = new List<ToolPanel>(); ToolPanel current; public string ShotDir, SelfTestFile; readonly System.Windows.Forms.Timer toastTimer = new System.Windows.Forms.Timer();
         public Shell(IList<ToolPanel> tools, string startKey)
         {
             string exeDir = Path.GetDirectoryName(Application.ExecutablePath); Settings = new Settings(Path.Combine(exeDir, "settings.ini"));
@@ -666,8 +683,16 @@ namespace PSTools
             side.Dock = DockStyle.Left; side.Width = Theme.S(250); side.BackColor = Theme.Side;
             Panel brand = new Panel(); brand.Dock = DockStyle.Top; brand.Height = Theme.S(66); brand.BackColor = Theme.Side;
             Label bTitle = Theme.Lbl("▌ POWERTOWER", Theme.Teal, Theme.UIBold); bTitle.Location = new Point(Theme.S(14), Theme.S(14)); Label bSub = Theme.Lbl("portable security workbench", Theme.Faint, Theme.UISmall); bSub.Location = new Point(Theme.S(16), Theme.S(36)); brand.Controls.Add(bTitle); brand.Controls.Add(bSub);
-            Panel list = new Panel(); list.Dock = DockStyle.Fill; list.BackColor = Theme.Side; list.AutoScroll = true;
-            for (int i = tools.Count - 1; i >= 0; i--) { ToolPanel tp = tools[i]; tp.Host = this; panels.Add(tp); SideItem si = new SideItem(tp); si.Picked += Select; items.Add(si); list.Controls.Add(si); }
+            list.Dock = DockStyle.Fill; list.BackColor = Theme.Side; list.AutoScroll = true;
+            // sidebar rows in display order: a collapsible group heading before the first tool of each group (remembered), then the tools; Home has no group
+            List<Control> rows = new List<Control>(); string grp = null; HashSet<string> collapsed = new HashSet<string>(Settings.Get("side.collapsed", "").Split('|'));
+            foreach (ToolPanel tp in tools)
+            {
+                tp.Host = this; panels.Add(tp); ToolInfo ti = Tools.ByPanel(tp.GetType().Name); string g = ti == null ? "" : ti.Group;
+                if (g.Length > 0 && g != grp) { SideHeader h = new SideHeader(g, !collapsed.Contains(g)); h.Toggled += delegate { SaveCollapsed(); LayoutSide(); }; headers.Add(h); rows.Add(h); grp = g; }
+                SideItem si = new SideItem(tp, ti); si.Picked += Select; si.Moved += SelectAdjacent; items.Add(si); rows.Add(si); if (g.Length > 0) { headers[headers.Count - 1].Items.Add(si); si.Visible = !collapsed.Contains(g); }
+            }
+            foreach (Control c in rows) { c.Dock = DockStyle.None; list.Controls.Add(c); } sideRows.AddRange(rows); list.Resize += delegate { LayoutSide(); }; LayoutSide();   // explicit positions: docking inside an AutoScroll panel drifts once it scrolls
             Panel foot = new Panel(); foot.Dock = DockStyle.Bottom; foot.Height = Theme.S(100); foot.BackColor = Theme.Side; foot.Padding = new Padding(Theme.S(12), Theme.S(8), Theme.S(12), Theme.S(10));
             Button bElev = Theme.Btn("Restart as administrator", false); bElev.Dock = DockStyle.Fill; bElev.AutoSize = false; bElev.Visible = !IsElevated; bElev.Click += delegate { RestartElevated(); };
             Label elevOk = Theme.Lbl("● running as administrator", Theme.Green, Theme.UISmall); elevOk.Dock = DockStyle.Fill; elevOk.Visible = IsElevated; elevOk.TextAlign = ContentAlignment.MiddleLeft; elevOk.AutoSize = false;
@@ -685,17 +710,26 @@ namespace PSTools
             head.Controls.Add(hIcon); head.Controls.Add(hTitle); head.Controls.Add(hBlurb); head.Controls.Add(hAdmin); head.Controls.Add(toast);
             toastTimer.Interval = 6000; toastTimer.Tick += delegate { toast.Text = ""; toastTimer.Stop(); };
             host.Dock = DockStyle.Fill; host.BackColor = Theme.Panel; host.Padding = new Padding(0);
-            Controls.Add(host); Controls.Add(head); Controls.Add(side); host.BringToFront();
+            // a persistent status strip: the last message stays until the next one (the header toast fades), plus the keys that work everywhere
+            statusBar.Dock = DockStyle.Bottom; statusBar.Height = Theme.S(26); statusBar.BackColor = Theme.Side; sLeft.Location = new Point(Theme.S(12), Theme.S(5)); sLeft.AutoEllipsis = true; sRight.Location = new Point(Theme.S(600), Theme.S(5)); sRight.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            sRight.Text = "F5 run   \u00b7   Esc cancel   \u00b7   Ctrl+F search   \u00b7   Ctrl+E export CSV   \u00b7   Ctrl+\u2191\u2193 switch tool"; statusBar.Controls.Add(sLeft); statusBar.Controls.Add(sRight); statusBar.Resize += delegate { sRight.Left = statusBar.Width - sRight.Width - Theme.S(12); sLeft.MaximumSize = new Size(Math.Max(100, statusBar.Width - sRight.Width - Theme.S(40)), 0); };
+            KeyPreview = true;
+            Controls.Add(host); Controls.Add(statusBar); Controls.Add(head); Controls.Add(side); host.BringToFront();
             FormClosing += delegate { Settings.Set("win.w", Width.ToString()); Settings.Set("win.h", Height.ToString()); Settings.Set("win.max", WindowState == FormWindowState.Maximized ? "1" : "0"); Settings.Save(); foreach (ToolPanel p in panels) { try { p.OnHidden(); } catch { } } };
-            ToolPanel first = panels[panels.Count - 1]; foreach (ToolPanel p in panels) if (p.GetType().Name.ToLowerInvariant().StartsWith(startKey.ToLowerInvariant()) && startKey.Length > 0) first = p;
+            ToolPanel first = panels[0]; foreach (ToolPanel p in panels) if (p.GetType().Name.ToLowerInvariant().StartsWith(startKey.ToLowerInvariant()) && startKey.Length > 0) first = p;
             Load += delegate { Select(first); if (SelfTestFile != null) RunSelfTest(); else if (ShotDir != null) RunShots(); };
         }
         void Select(ToolPanel p)
         {
             if (current == p) return;
             if (current != null) { current.OnHidden(); host.Controls.Remove(current); }
-            current = p; foreach (SideItem si in items) si.Selected = si.Panel == p; toast.Text = ""; toastTimer.Stop();
-            iconKey = p.GetType().Name; hIcon.Invalidate(); hTitle.Text = p.Title; hBlurb.Text = p.Blurb; hAdmin.Text = p.NeedsAdmin ? (IsElevated ? "administrator: yes" : "some actions here need administrator rights - use Restart as administrator") : ""; hAdmin.ForeColor = IsElevated ? Theme.Dim : Theme.Amber;
+            current = p; foreach (SideItem si in items) { si.Selected = si.Panel == p; if (si.Selected && si.Visible) list.ScrollControlIntoView(si); } toast.Text = ""; toastTimer.Stop();
+            iconKey = p.GetType().Name; hIcon.Invalidate(); hTitle.Text = p.Title; hBlurb.Text = p.Blurb;
+            // one line under the blurb says what the tool can do beyond reading, and whether it wants administrator rights
+            ToolInfo ti = Tools.ByPanel(p.GetType().Name); bool ro = ti == null || ti.ReadOnly; string fx = ro ? "\u25cf  read-only" : ti.Effects;
+            string admin = p.NeedsAdmin ? (IsElevated ? "administrator: yes" : "some actions need administrator rights - use Restart as administrator") : "";
+            hAdmin.Text = fx + (admin.Length > 0 ? "     \u00b7     " + admin : ""); hAdmin.ForeColor = (p.NeedsAdmin && !IsElevated) || (ti != null && (ti.Writes.Length > 0 || ti.Caution.Length > 0)) ? Theme.Amber : ro ? Theme.Green : Theme.Blue;
+            sLeft.Text = p.Title + (ro ? "  \u00b7  read-only" : ""); sLeft.ForeColor = Theme.Dim;
             p.Dock = DockStyle.Fill; host.Controls.Add(p); if (!Program.DemoMode) p.OnShown(); p.Focus();
         }
         /// <summary>Re-tint every control (visible or not) from the old palette to the new one, then repaint.</summary>
@@ -714,7 +748,32 @@ namespace PSTools
             foreach (Control k in c.Controls) { if (k == skip) continue; Walk(k, map, skip); }
             c.Invalidate();
         }
-        public void Toast(string msg, bool warn) { toast.Text = msg; toast.ForeColor = warn ? Theme.Amber : Theme.Teal; toast.Left = head.Width - toast.Width - Theme.S(20); toastTimer.Stop(); toastTimer.Start(); }
+        public void Toast(string msg, bool warn) { toast.Text = msg; toast.ForeColor = warn ? Theme.Amber : Theme.Teal; toast.Left = head.Width - toast.Width - Theme.S(20); toastTimer.Stop(); toastTimer.Start(); sLeft.Text = msg; sLeft.ForeColor = warn ? Theme.Amber : Theme.Dim; }
+        /// <summary>Stacks the visible sidebar rows from the top and sizes the scroll range to them.</summary>
+        void LayoutSide() { int y = 0, w = list.ClientSize.Width; Point sp = list.AutoScrollPosition; foreach (Control c in sideRows) { if (!c.Visible) continue; c.SetBounds(sp.X, y + sp.Y, w, c.Height); y += c.Height; } list.AutoScrollMinSize = new Size(0, y); }
+        void SaveCollapsed() { List<string> c = new List<string>(); foreach (SideHeader h in headers) if (!h.Open) c.Add(h.Group); Settings.Set("side.collapsed", string.Join("|", c.ToArray())); Settings.Save(); }
+        /// <summary>Move to the previous or next visible tool in the sidebar (Ctrl+Up / Ctrl+Down, or the arrow keys on a sidebar row).</summary>
+        public void SelectAdjacent(int dir)
+        {
+            int i = -1; for (int k = 0; k < items.Count; k++) if (items[k].Panel == current) i = k;
+            for (int k = i + dir; k >= 0 && k < items.Count; k += dir) if (items[k].Visible) { Select(items[k].Panel); items[k].Focus(); return; }
+        }
+        /// <summary>The keys that work on every tool: F5 runs it, Esc cancels a running scan, Ctrl+F searches, Ctrl+E exports the CSV, Ctrl+Up/Down switch tools. Buttons opt in by Tag ("run" / "stop").</summary>
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (current != null)
+            {
+                if (keyData == Keys.F5 && ClickTagged(current, "run")) return true;
+                if (keyData == Keys.Escape && ClickTagged(current, "stop")) return true;
+                if (keyData == (Keys.Control | Keys.F)) { DataView v = FirstView(current); if (v != null) { v.FocusSearch(); return true; } }
+                if (keyData == (Keys.Control | Keys.E)) { DataView v = FirstView(current); if (v != null) { v.Export(); return true; } }
+                if (keyData == (Keys.Control | Keys.Up)) { SelectAdjacent(-1); return true; }
+                if (keyData == (Keys.Control | Keys.Down)) { SelectAdjacent(1); return true; }
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+        static bool ClickTagged(Control c, string tag) { Button b = c as Button; if (b != null) { if ((b.Tag as string) == tag && b.Enabled && b.Visible) { b.PerformClick(); return true; } return false; } foreach (Control k in c.Controls) if (ClickTagged(k, tag)) return true; return false; }
+        static DataView FirstView(Control c) { DataView v = c as DataView; if (v != null) return v; foreach (Control k in c.Controls) { DataView r = FirstView(k); if (r != null) return r; } return null; }
         public bool Confirm(string title, string text) { return MessageBox.Show(this, text, title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes; }
         public void Info(string title, string text) { MessageBox.Show(this, text, title, MessageBoxButtons.OK, MessageBoxIcon.Information); }
         public void Error(string title, string text) { MessageBox.Show(this, text, title, MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -731,6 +790,8 @@ namespace PSTools
             catch { Toast("Elevation was cancelled.", true); }
         }
         public void ShowTool<T>(Action<T> then) where T : ToolPanel { foreach (ToolPanel p in panels) if (p is T) { Select(p); if (then != null) then((T)p); return; } }
+        /// <summary>Open a tool by its panel class name (the Home page and --tool use this).</summary>
+        public void ShowTool(string panelClass) { foreach (ToolPanel p in panels) if (p.GetType().Name == panelClass) { Select(p); return; } }
         /// <summary>The instance of a tool panel, so one tool can read another's collected state (e.g. the map reading the vuln findings). Null if not present.</summary>
         public T Panel<T>() where T : ToolPanel { foreach (ToolPanel p in panels) if (p is T) return (T)p; return null; }
         void RunSelfTest()
@@ -770,8 +831,8 @@ namespace PSTools
     /// <summary>One sidebar row: the tool's icon and title; the blurb is the tooltip.</summary>
     class SideItem : Panel
     {
-        public readonly ToolPanel Panel; bool selected, hover; public event Action<ToolPanel> Picked;
-        public SideItem(ToolPanel p) { Panel = p; Height = Theme.S(36); Dock = DockStyle.Top; Cursor = Cursors.Hand; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.Selectable, true); TabStop = true; Text = p.Title; AccessibleName = p.Title; AccessibleRole = AccessibleRole.PushButton; Name = "side_" + p.GetType().Name; GotFocus += delegate { Invalidate(); }; LostFocus += delegate { Invalidate(); }; KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { e.Handled = true; if (Picked != null) Picked(Panel); } }; MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); }; Click += delegate { if (Picked != null) Picked(Panel); }; new ToolTip().SetToolTip(this, p.Blurb); }
+        public readonly ToolPanel Panel; readonly ToolInfo info; bool selected, hover; public event Action<ToolPanel> Picked; public event Action<int> Moved;
+        public SideItem(ToolPanel p, ToolInfo info) { Panel = p; this.info = info; Height = Theme.S(32); Cursor = Cursors.Hand; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.Selectable, true); TabStop = true; Text = p.Title; AccessibleName = p.Title; AccessibleRole = AccessibleRole.PushButton; Name = "side_" + p.GetType().Name; GotFocus += delegate { Invalidate(); }; LostFocus += delegate { Invalidate(); }; KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { e.Handled = true; if (Picked != null) Picked(Panel); } else if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down) { e.Handled = true; if (Moved != null) Moved(e.KeyCode == Keys.Up ? -1 : 1); } }; MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); }; Click += delegate { if (Picked != null) Picked(Panel); }; new ToolTip().SetToolTip(this, p.Blurb + (info != null && !info.ReadOnly ? "\r\n\r\n" + info.Effects : "\r\n\r\nread-only")); }
         public bool Selected { get { return selected; } set { selected = value; Invalidate(); } }
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -779,8 +840,23 @@ namespace PSTools
             if (selected) using (Brush b = new SolidBrush(Theme.Teal)) g.FillRectangle(b, 0, 0, 3, Height);
             if (Focused) using (Pen fp = new Pen(Theme.Teal)) g.DrawRectangle(fp, 1, 1, Width - 3, Height - 3);
             int ic = Theme.S(20); Icons.Paint(g, Panel.GetType().Name, new Rectangle(Theme.S(14), (Height - ic) / 2, ic, ic), selected || hover ? Theme.Teal : Theme.TealSoft);
-            TextRenderer.DrawText(g, Panel.Title, selected ? Theme.UIBold : Theme.UI, new Rectangle(Theme.S(44), 0, Width - Theme.S(48), Height), Theme.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, Panel.Title, selected ? Theme.UIBold : Theme.UI, new Rectangle(Theme.S(44), 0, Width - Theme.S(70), Height), Theme.Ink, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            // a dot on the right marks a tool that can change this machine or show secrets (amber) or that uses the network (blue); read-only tools have none
+            if (info != null && !info.ReadOnly) { int d = Theme.S(7); using (Brush b = new SolidBrush(info.Writes.Length > 0 || info.Caution.Length > 0 ? Theme.Amber : Theme.Blue)) g.FillEllipse(b, Width - Theme.S(20), (Height - d) / 2, d, d); }
             using (Pen p = new Pen(Theme.Line)) g.DrawLine(p, 0, Height - 1, Width, Height - 1);
+        }
+    }
+
+    /// <summary>A sidebar group heading. Click it to fold or unfold the tools under it; the state is remembered in settings.ini.</summary>
+    class SideHeader : Panel
+    {
+        public readonly string Group; public bool Open; public readonly List<SideItem> Items = new List<SideItem>(); public event Action Toggled;
+        public SideHeader(string group, bool open) { Group = group; Open = open; Height = Theme.S(26); Cursor = Cursors.Hand; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true); Name = "group_" + group; AccessibleName = group; Click += delegate { Toggle(); }; }
+        public void Toggle() { Open = !Open; foreach (SideItem i in Items) i.Visible = Open; Invalidate(); if (Toggled != null) Toggled(); }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics; g.Clear(Theme.Side);
+            TextRenderer.DrawText(g, (Open ? "\u25be  " : "\u25b8  ") + Group.Replace("incident response", "IR").ToUpperInvariant(), Theme.UISmall, new Rectangle(Theme.S(14), Theme.S(4), Width - Theme.S(18), Height - Theme.S(4)), Theme.Faint, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
     }
 

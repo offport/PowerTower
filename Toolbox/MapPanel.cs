@@ -256,7 +256,7 @@ namespace PSTools
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            bBuild = Theme.Btn("Build map", true); bBuild.Click += delegate { Build(); };
+            bBuild = Theme.Btn("Build map", true); bBuild.Tag = "run"; bBuild.Click += delegate { Build(); };
             cDeep = Theme.Toggle("deep scan (checklist + events, slower)", true); new ToolTip().SetToolTip(cDeep, "Also run the security checklist and read recent security events. Adds about 20-30 seconds.");
             bExpand = Theme.Btn("Expand all", false); bExpand.Click += delegate { graph.ExpandAll(); }; bCollapse = Theme.Btn("Collapse all", false); bCollapse.Click += delegate { graph.CollapseAll(); }; bFit = Theme.Btn("Fit", false); bFit.Click += delegate { graph.FitView(); }; bReformat = Theme.Btn("Reformat", false); new ToolTip().SetToolTip(bReformat, "Re-flow the whole map tidily: releases any nodes you dragged and lets the layout settle again. Keeps what is expanded."); bReformat.Click += delegate { graph.Reformat(); };
             foreach (Control c in new Control[] { bBuild, cDeep, bExpand, bCollapse, bReformat, bFit, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);

@@ -59,7 +59,7 @@ namespace PSTools
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
             bList = Theme.Btn("Loaded list", false); bBlocked = Theme.Btn("Blocked now", false); bList.Click += delegate { SetMode(false); }; bBlocked.Click += delegate { SetMode(true); };
-            bFile = Theme.Btn("Add from file…", true); bPaste = Theme.Btn("Paste…", false); bAdd = Theme.Btn("Add entry", false); bBlockAll = Theme.Btn("Block all listed", false); bRefresh = Theme.Btn("Refresh", false); bBackups = Theme.Btn("Backups…", false); bFlush = Theme.Btn("Flush DNS", false);
+            bFile = Theme.Btn("Add from file…", true); bPaste = Theme.Btn("Paste…", false); bAdd = Theme.Btn("Add entry", false); bBlockAll = Theme.Caution("Block all listed…"); bRefresh = Theme.Btn("Refresh", false); bBackups = Theme.Btn("Backups…", false); bFlush = Theme.Caution("Flush DNS");
             bFile.Click += delegate { string f = Dialogs.PickFile(this, "The file of domains and IPs", "Lists (*.txt;*.csv;*.log)|*.txt;*.csv;*.log|All files|*.*"); if (f != null) LoadFile(f); };
             bPaste.Click += delegate { string t = Dialogs.PasteText(this, "Paste domains and IPs", "URLs, log lines and defanged names like evil[.]com are fine - one thing per line or mixed in prose."); if (t != null) AddLines(t.Split('\n'), "pasted"); };
             bAdd.Click += delegate { BlockItem it = new BlockItem(); it.Value = ""; it.Kind = Kind.Invalid; it.Source = "typed"; it.Note = "type the value in the row"; loaded.Add(it); view.Add(new object[] { it }); view.Select(new object[] { it }, true); };
@@ -69,8 +69,8 @@ namespace PSTools
             bFlush.Click += delegate { try { ProcessStartInfo si = new ProcessStartInfo("ipconfig.exe", "/flushdns"); si.UseShellExecute = false; si.CreateNoWindow = true; Process.Start(si).WaitForExit(); Host.Toast("DNS cache flushed.", false); } catch (Exception ex) { Host.Toast("flush failed: " + ex.Message, true); } };
             cHosts = Theme.Toggle("domains → hosts file", true); cFw = Theme.Toggle("IPs → firewall", true); cWww = Theme.Toggle("add www. variant", true);
             Label ls = Theme.Lbl("resolve to", Theme.Dim, Theme.UI); tSink = Theme.Text(Host == null ? "0.0.0.0" : "0.0.0.0", 110);
-            Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1;
-            foreach (Control c in new Control[] { bList, bBlocked, gap, bFile, bPaste, bAdd, bBlockAll, bRefresh, bBackups, bFlush }) bar.Controls.Add(c);
+            Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1; Panel gap2 = new Panel(); gap2.Width = Theme.S(14); gap2.Height = 1;
+            foreach (Control c in new Control[] { bList, bBlocked, gap, bFile, bPaste, bAdd, bRefresh, bBackups, gap2, bFlush, bBlockAll }) bar.Controls.Add(c);   // the two that change the machine sit last, in amber
             FlowLayoutPanel bar2 = Theme.Bar(40); bar2.Padding = new Padding(Theme.S(10), 0, Theme.S(10), 0);
             foreach (Control c in new Control[] { cHosts, cFw, cWww, ls, tSink, status }) bar2.Controls.Add(c);
             status.Margin = new Padding(Theme.S(16), Theme.S(9), 0, 0);
@@ -80,7 +80,7 @@ namespace PSTools
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "item"); };
             view.Activated += delegate (object o) { view.Select(new object[] { o }, !view.SelectedItems.Contains(o)); };
             // selection bar
-            sel.Add("Block selected", true, delegate { Block(Sel()); }); sel.Add("Unblock selected", false, delegate { Unblock(Sel()); }); sel.Add("Remove from list", false, delegate { RemoveFromList(Sel()); }); sel.Add("Export selected", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
+            sel.AddCaution("Block selected…", delegate { Block(Sel()); }); sel.AddCaution("Unblock selected…", delegate { Unblock(Sel()); }); sel.Separator(); sel.Add("Remove from list", false, delegate { RemoveFromList(Sel()); }); sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(bar2); Controls.Add(bar); view.BringToFront();
             SetMode(false);
         }
@@ -217,7 +217,7 @@ namespace PSTools
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            bFile = Theme.Btn("Load file…", true); bPaste = Theme.Btn("Paste…", false); bClear = Theme.Btn("Clear", false); bRun = Theme.Btn("Check reachability", true); bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false;
+            bFile = Theme.Btn("Add from file…", false); bPaste = Theme.Btn("Paste…", false); bClear = Theme.Btn("Clear", false); bRun = Theme.Btn("Check reachability", true); bRun.Tag = "run"; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false;
             bFile.Click += delegate { string f = Dialogs.PickFile(this, "The file of domains and IPs", "Lists (*.txt;*.csv;*.log)|*.txt;*.csv;*.log|All files|*.*"); if (f != null) { try { AddLines(File.ReadAllLines(f)); } catch (Exception ex) { Host.Error("Could not read the file", ex.Message); } } };
             bPaste.Click += delegate { string t = Dialogs.PasteText(this, "Paste domains and IPs", "One per line or mixed in prose; URLs and defanged names are fine."); if (t != null) AddLines(t.Split('\n')); };
             bClear.Click += delegate { rows.Clear(); view.SetItems(new object[0], false); };
@@ -231,7 +231,7 @@ namespace PSTools
             sel.Add("Send to blocker", true, delegate { List<string> v = new List<string>(); foreach (object o in view.Targets) v.Add(((ReachRow)o).Value); Host.ShowTool<BlockerPanel>(delegate (BlockerPanel b) { b.AddValues(v, "reachability check"); }); });
             sel.Add("Re-check selected", false, delegate { List<ReachRow> l = new List<ReachRow>(); foreach (object o in view.Targets) l.Add((ReachRow)o); Run(l); });
             sel.Add("Remove", false, delegate { List<object> t = view.Targets; foreach (object o in t) rows.Remove((ReachRow)o); view.Remove(t); });
-            sel.Add("Export selected", false, delegate { view.Export(); });
+            sel.Add("Export selected…", false, delegate { view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(bar); view.BringToFront();
         }
         void SetCols(int[] ports) { view.Apply(Columns.Reach(ports)); }
@@ -336,7 +336,7 @@ namespace PSTools
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "connection"); };
             sel.Add("Block remote IPs", true, delegate { List<string> v = new List<string>(); foreach (object o in view.Targets) { Conn c = (Conn)o; if (c.Remote.Length > 0 && !c.Loopback && !v.Contains(c.Remote)) v.Add(c.Remote); } if (v.Count == 0) { Host.Toast("The selected rows have no remote address.", true); return; } Host.ShowTool<BlockerPanel>(delegate (BlockerPanel b) { b.AddValues(v, "connections monitor"); }); });
             sel.Add("Copy remote IPs", false, delegate { List<string> v = new List<string>(); foreach (object o in view.Targets) { Conn c = (Conn)o; if (c.Remote.Length > 0 && !v.Contains(c.Remote)) v.Add(c.Remote); } if (v.Count > 0) Clipboard.SetText(string.Join("\r\n", v.ToArray())); Host.Toast(v.Count + " address(es) copied", false); });
-            sel.Add("Export selected", false, delegate { view.Export(); });
+            sel.Add("Export selected…", false, delegate { view.Export(); });
             names.HostResolved += delegate { try { BeginInvoke((Action)delegate { foreach (Conn c in conns.Values) if (c.Host == "…") c.Host = names.HostOf(c.Remote); view.Invalidate2(); }); } catch { } };
             timer.Interval = 1000; timer.Tick += delegate { if (running) Tick(); };
             Controls.Add(view); Controls.Add(sel); Controls.Add(bar); view.BringToFront();
@@ -418,8 +418,9 @@ namespace PSTools
             view = NewView("process-hogs");
             view.Apply(Columns.Processes());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "process"); };
-            sel.Add("Open file location", false, delegate { foreach (object o in view.Targets) { ProcRow p = (ProcRow)o; if (p.Pid == 0) continue; try { Dialogs.OpenInExplorer(Process.GetProcessById(p.Pid).MainModule.FileName); } catch (Exception ex) { Host.Toast(p.Name + ": " + ex.Message, true); } } });
+            sel.Add("Open location", true, delegate { foreach (object o in view.Targets) { ProcRow p = (ProcRow)o; if (p.Pid == 0) continue; try { Dialogs.OpenInExplorer(Process.GetProcessById(p.Pid).MainModule.FileName); } catch (Exception ex) { Host.Toast(p.Name + ": " + ex.Message, true); } } });
             sel.Add("Loaded modules…", false, delegate { ProcRow p = null; foreach (object o in view.Targets) { ProcRow r = (ProcRow)o; if (r.Pid > 4) { p = r; break; } } if (p == null) { Host.Toast("Pick a process with a PID (switch off \"group by name\").", true); return; } ModuleViewer.Show(Host, p.Pid, p.Name); });
+            sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Separator();
             sel.AddDanger("End selected processes…", delegate
             {
                 List<ProcRow> l = new List<ProcRow>(); foreach (object o in view.Targets) { ProcRow p = (ProcRow)o; if (p.Alive && p.Pid > 4) l.Add(p); }
@@ -427,7 +428,6 @@ namespace PSTools
                 if (!Host.Confirm("End " + l.Count + " process(es)?", "This kills them without saving anything they hold open.\n\n" + string.Join("\n", l.ConvertAll(delegate (ProcRow p) { return p.Name + " [" + p.Pid + "]"; }).ToArray()))) return;
                 int ok = 0; foreach (ProcRow p in l) { try { Process.GetProcessById(p.Pid).Kill(); ok++; } catch (Exception ex) { Host.Toast(p.Name + ": " + ex.Message, true); } } Host.Toast(ok + " ended", false);
             });
-            sel.Add("Export selected", false, delegate { view.Export(); });
             timer.Interval = 1000; timer.Tick += delegate { if (running) Tick(); };
             Controls.Add(view); Controls.Add(sel); Controls.Add(gauges); Controls.Add(bar); view.BringToFront();
         }
@@ -483,23 +483,24 @@ namespace PSTools
     {
         public override string Title { get { return Tools.Title(GetType().Name); } }
         public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
-        readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Storage storage = new Storage(); readonly ComboBox cTarget, cShow; readonly Button bFolder, bScan, bCancel; readonly NumericUpDown nMin; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); readonly System.Windows.Forms.Timer prog = new System.Windows.Forms.Timer(); Thread worker; string customFolder;
+        readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Storage storage = new Storage(); readonly ComboBox cTarget, cShow; readonly Button bFolder, bScan, bCancel, bFiles, bDirs, bTypes; readonly NumericUpDown nMin; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall); readonly System.Windows.Forms.Timer prog = new System.Windows.Forms.Timer(); Thread worker; string customFolder;
         public DiskPanel()
         {
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
-            Label lt = Theme.Lbl("scan", Theme.Dim, Theme.UI); cTarget = Theme.Combo(220); bFolder = Theme.Btn("Folder…", false); bFolder.Click += delegate { string f = Dialogs.PickFolder(this, "Folder to scan", null); if (f != null) { customFolder = f; if (!cTarget.Items.Contains(f)) cTarget.Items.Add(f); cTarget.SelectedItem = f; } };
+            Label lt = Theme.Lbl("scan", Theme.Dim, Theme.UI); cTarget = Theme.Combo(220); bFolder = Theme.Btn("Browse…", false); bFolder.Click += delegate { string f = Dialogs.PickFolder(this, "Folder to scan", null); if (f != null) { customFolder = f; if (!cTarget.Items.Contains(f)) cTarget.Items.Add(f); cTarget.SelectedItem = f; } };
             Label lm = Theme.Lbl("files ≥", Theme.Dim, Theme.UI); nMin = Theme.Num(50, 0, 100000, 70); Label lmb = Theme.Lbl("MB", Theme.Dim, Theme.UI);
-            bScan = Theme.Btn("Scan", true); bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { storage.Cancel = true; };
-            Label ls = Theme.Lbl("show", Theme.Dim, Theme.UI); cShow = Theme.Combo(150, "largest files", "folders", "file types"); cShow.SelectedIndexChanged += delegate { ShowRows(); };
-            foreach (Control c in new Control[] { lt, cTarget, bFolder, lm, nMin, lmb, bScan, bCancel, ls, cShow, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
+            bScan = Theme.Btn("Scan folder", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { storage.Cancel = true; };
+            cShow = Theme.Combo(150, "largest files", "folders", "file types"); cShow.Visible = false; cShow.SelectedIndexChanged += delegate { ShowRows(); SyncTabs(); };   // the mode lives in the (hidden) combo; the three tab buttons drive it
+            bFiles = Theme.Btn("Largest files", false); bDirs = Theme.Btn("Folders", false); bTypes = Theme.Btn("File types", false); bFiles.Click += delegate { cShow.SelectedIndex = 0; }; bDirs.Click += delegate { cShow.SelectedIndex = 1; }; bTypes.Click += delegate { cShow.SelectedIndex = 2; }; Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1;
+            foreach (Control c in new Control[] { bFiles, bDirs, bTypes, gap, lt, cTarget, bFolder, lm, nMin, lmb, bScan, bCancel, cShow, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0); SyncTabs();
             view = NewView("storage");
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "item"); };
             view.Activated += delegate (object o) { Node n = o as Node; if (n != null) Dialogs.OpenInExplorer(n.Path); };
-            sel.Add("Open in Explorer", true, delegate { int k = 0; foreach (object o in view.Targets) { Node n = o as Node; if (n != null && k++ < 8) Dialogs.OpenInExplorer(n.Path); } });
+            sel.Add("Open location", true, delegate { int k = 0; foreach (object o in view.Targets) { Node n = o as Node; if (n != null && k++ < 8) Dialogs.OpenInExplorer(n.Path); } });
             sel.Add("Copy paths", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) { Node n = o as Node; if (n != null) l.Add(n.Path); } if (l.Count > 0) Clipboard.SetText(string.Join("\r\n", l.ToArray())); Host.Toast(l.Count + " path(s) copied", false); });
-            sel.Add("Export selected", false, delegate { view.Export(); });
-            sel.AddDanger("Move to Recycle Bin…", delegate
+            sel.Add("Export selected…", false, delegate { view.Export(); });
+            sel.Separator(); sel.AddCaution("Move to Recycle Bin…", delegate
             {
                 List<Node> l = new List<Node>(); long bytes = 0; foreach (object o in view.Targets) { Node n = o as Node; if (n != null) { l.Add(n); bytes += n.Size; } }
                 if (l.Count == 0) return;
@@ -524,6 +525,7 @@ namespace PSTools
         {
             for (int i = 2; i >= 0; i--) { try { if (view.VisibleItems.Count > 0) view.SetCurrent(0, 1); cShow.SelectedIndex = i; Application.DoEvents(); ExerciseView(view, r); } catch (Exception ex) { r.AppendLine("FAIL ui disk/" + i + ": " + ex.GetType().Name + ": " + ex.Message); } }
         }
+        void SyncTabs() { Theme.SetTab(bFiles, cShow.SelectedIndex == 0); Theme.SetTab(bDirs, cShow.SelectedIndex == 1); Theme.SetTab(bTypes, cShow.SelectedIndex == 2); }
         void ShowRows()
         {
             if (storage.Root == null) return;
@@ -589,7 +591,7 @@ namespace PSTools
             Label lnm = Theme.Lbl("name has", Theme.Dim, Theme.UI); tName = Theme.Text("", 120); tip.SetToolTip(tName, "Only entries whose name contains this text.");
             Label lsz = Theme.Lbl("size", Theme.Dim, Theme.UI); nMin = Theme.Num(0, 0, 999999, 56); Label lsz2 = Theme.Lbl("to", Theme.Dim, Theme.UI); nMax = Theme.Num(0, 0, 999999, 56); cUnit = Theme.Combo(56, "KB", "MB", "GB"); cUnit.SelectedIndex = 1; tip.SetToolTip(nMin, "Size range (0 = no limit) in the chosen unit. Applies to exFAT files; the NTFS change journal does not record size, so those rows are not size-filtered.");
             cNoise = Theme.Toggle("include noise", false); cShadow = Theme.Toggle("shadow copies", true);
-            bScan = Theme.Btn("Scan", true); bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; };
+            bScan = Theme.Btn("Scan drives", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { cancel = true; };
             foreach (Control c in new Control[] { ld, drives, lday, nDays, ldays, lp, tPath, lty, tExt, lnm, tName, lsz, nMin, lsz2, nMax, cUnit, cNoise, cShadow, bScan, bCancel, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             // the emptied-from-the-bin strip
             binPanel.Dock = DockStyle.Top; binPanel.AutoSize = true; binPanel.BackColor = Theme.Side; binPanel.Visible = false; binPanel.Padding = new Padding(Theme.S(10), Theme.S(6), Theme.S(10), Theme.S(6));
@@ -602,9 +604,9 @@ namespace PSTools
             view.Extra.Controls.Add(lsrc); view.Extra.Controls.Add(cSource); view.Extra.Controls.Add(cRecov); cSource.SelectedIndexChanged += delegate { view.Refilter(); }; cRecov.CheckedChanged += delegate { view.Refilter(); };
             view.Filter = delegate (object o) { DeletedRow d = (DeletedRow)o; if (cSource.SelectedIndex == 1 && d.Source != "journal") return false; if (cSource.SelectedIndex == 2 && d.Source != "exFAT") return false; if (cRecov.Checked && !d.Recoverable) return false; return true; };
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "entry"); };
-            sel.Add("Recover selected to…", true, delegate { Recover(); });
+            sel.AddCaution("Recover selected to…", delegate { Recover(); });
             sel.Add("Copy paths", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.Add(((DeletedRow)o).Path); if (l.Count > 0) Clipboard.SetText(string.Join("\r\n", l.ToArray())); Host.Toast(l.Count + " path(s) copied", false); });
-            sel.Add("Export selected", false, delegate { view.Export(); });
+            sel.Add("Export selected…", false, delegate { view.Export(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(binPanel); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
         public override void OnShown() { if (driveBoxes.Count == 0) LoadDrives(); }

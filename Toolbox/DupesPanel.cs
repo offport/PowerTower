@@ -27,7 +27,7 @@ namespace PSTools
             BackColor = Theme.Panel;
             FlowLayoutPanel bar = Theme.Bar(46);
             Label lf = Theme.Lbl("folder", Theme.Dim, Theme.UI); tRoot = Theme.Text("", 320); bPick = Theme.Btn("Browse…", false); bPick.Click += delegate { string p = Dialogs.PickFolder(Host, "Folder to scan for duplicates", tRoot.Text); if (p != null) tRoot.Text = p; };
-            bScan = Theme.Btn("Scan", true); bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) scan.Stop(); };
+            bScan = Theme.Btn("Find duplicates", true); bScan.Tag = "run"; bScan.Click += delegate { Scan(); }; bCancel = Theme.Btn("Cancel", false); bCancel.Tag = "stop"; bCancel.Enabled = false; bCancel.Click += delegate { if (scan != null) scan.Stop(); };
             Label lm = Theme.Lbl("min size", Theme.Dim, Theme.UI); cMin = Theme.Combo(100, "1 KB", "100 KB", "1 MB", "10 MB"); cMin.SelectedIndex = 1;
             foreach (Control c in new Control[] { lf, tRoot, bPick, bScan, bCancel, lm, cMin, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 5; strip.RowCount = 1;
@@ -35,11 +35,11 @@ namespace PSTools
             view = NewView("duplicates"); view.Apply(Columns.Duplicates());
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, "file"); };
             view.Activated += delegate (object o) { Dialogs.OpenInExplorer(Path.GetDirectoryName(((DupeFile)o).Path)); };
-            sel.Add("Select all but newest per group", true, delegate { SelectExtras(); });
-            sel.AddDanger("Send ticked to Recycle Bin…", delegate { Recycle(); });
+            Button bExtra = sel.Add("Select extra copies", true, delegate { SelectExtras(); }); new ToolTip().SetToolTip(bExtra, "Ticks every copy except the one marked Keep - the oldest in each group - so they are ready to recycle.");
             sel.Add("Open location", false, delegate { int k = 0; foreach (object o in view.Targets) { if (k++ >= 8) break; Dialogs.OpenInExplorer(Path.GetDirectoryName(((DupeFile)o).Path)); } });
             sel.Add("Copy paths", false, delegate { List<string> l = new List<string>(); foreach (object o in view.Targets) l.Add(((DupeFile)o).Path); Clip(l); });
-            sel.Add("Export", false, delegate { view.Export(); });
+            sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Separator();
+            sel.AddCaution("Send ticked to Recycle Bin…", delegate { Recycle(); });
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
         }
 
