@@ -1,0 +1,13 @@
+{
+  "name": "Offport",
+  "line": "Cyber security consulting",
+  "logo": "offport-logo.svg",
+  "accent": "#0B7304",
+  "ink": "#0A0D0B",
+  "paper": "#FFFFFF",
+  "panel": "#EDEFEA",
+  "muted": "#525B55",
+  "rule": "#C9CEC9",
+  "severity": { "Critical": "#C4231B", "High": "#B5310A", "Medium": "#7E6200", "Low": "#0B7304", "Unrated": "#525B55" },
+  "footer": "For authorised use only. Prepared for the named client under the stated engagement; not for onward distribution."
+}

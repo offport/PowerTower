@@ -89,8 +89,9 @@ namespace PSTools
             throw new FormatException("unterminated string");
         }
         public static Dictionary<string, object> Obj(object o) { return o as Dictionary<string, object>; }
-        public static List<object> Arr(object o) { return (o as List<object>) ?? new List<object>(); }
-        public static string S(object o) { if (o == null) return null; if (o is string) return (string)o; if (o is double) return ((double)o).ToString(CultureInfo.InvariantCulture); if (o is int || o is long || o is float || o is decimal || o is short || o is byte) return Convert.ToString(o, CultureInfo.InvariantCulture); if (o is bool) return (bool)o ? "true" : "false"; return null; }
+        /// <summary>A JSON array, or any in-process list (List&lt;string&gt;, arrays) read the same way - trees built in code are read before they are ever serialised.</summary>
+        public static List<object> Arr(object o) { List<object> l = o as List<object>; if (l != null) return l; System.Collections.IEnumerable e = o as System.Collections.IEnumerable; l = new List<object>(); if (e != null && !(o is string) && !(o is System.Collections.IDictionary)) foreach (object x in e) l.Add(x); return l; }
+        public static string S(object o) { if (o == null) return null; if (o is string) return (string)o; if (o is double) return ((double)o).ToString(CultureInfo.InvariantCulture); if (o is DateTime) { DateTime dt = (DateTime)o; return (dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime()).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture); } if (o is int || o is long || o is float || o is decimal || o is short || o is byte) return Convert.ToString(o, CultureInfo.InvariantCulture); if (o is bool) return (bool)o ? "true" : "false"; return null; }
         public static double? N(object o) { if (o is double) return (double)o; if (o is int || o is long || o is float || o is decimal || o is short || o is byte) return Convert.ToDouble(o, CultureInfo.InvariantCulture);   /* trees built in-process carry boxed ints, not the doubles the parser makes */ string s = o as string; if (s != null) { double d; if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return d; } return null; }
         public static object Get(object o, params string[] path) { foreach (string p in path) { Dictionary<string, object> d = o as Dictionary<string, object>; if (d == null || !d.TryGetValue(p, out o)) return null; } return o; }
         public static string GetS(object o, params string[] path) { return S(Get(o, path)); }
@@ -620,6 +621,8 @@ namespace PSTools
     public class Finding
     {
         public string Cve = "", Title = "", Severity = "", Source = "", Product = "", Installed = "", Fix = "", Status = "", Evidence = "", Description = "", Url = "", Release = ""; public double? Cvss, Epss; public bool Kev, Exploited, Ransomware; public string KevDue = "";
+        /// <summary>Exploit-validation write-back (the SPECTRE loop): confirmed · not exploitable · untested - the default, because these findings are version/build-based and never exploit-validated here.</summary>
+        public string Validated = "untested";
         /// <summary>Critical / High / Medium / Low, from MSRC (Critical, Important, Moderate, Low) or NVD/CVSS wording.</summary>
         public string SeverityNorm { get { return Resolve.NormSeverity(Severity); } }
         public string ExploitText { get { if (Kev && Ransomware) return "KEV · ransomware"; if (Kev) return "KEV"; if (Exploited) return "exploited"; return ""; } }

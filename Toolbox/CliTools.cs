@@ -87,6 +87,11 @@ namespace PSTools
                 .Example("new --out C:\\eng\\acme --id ENG-2026-014 --client Acme --scope 10.0.0.0/24,ws-fin-01 --from 2026-10-01 --to 2026-10-31").Example("inspect C:\\eng\\acme\\engagement.json").Example("check C:\\eng\\acme\\engagement.json --host 10.0.0.205"));
             l[l.Count - 1].Run = Engagement_;
 
+            l.Add(new CliTool("report").Opt("in", "file", "the enriched bundle (or give it as the first argument)").Opt("out", "folder", "where the deliverables are written (default: the reports folder next to the exe); names are host_run_kind.ext, no timestamp").Opt("formats", "list", "json,csv,md,html,pdf (default: all five)").Opt("kind", "vulnerability", "the deliverable (hardening and compromise follow)")
+                .Opt("brand", "folder", "brand kit: brand.json and the logo SVG (default: brand\\ next to the exe; a neutral mark when absent)").Opt("pass", "passphrase", "the bundle's passphrase").Opt("key", "file", "the engagement private key as RSA XML").Opt("engagement", "file", "engagement.json with engagement.key beside it").Opt("plain", null, "the bundle is unsealed").Opt("no-validate", null, "skip the " + Ptreport.Schema + " schema check")
+                .Example("ws01.enriched.ptb --engagement C:\\eng\\acme.json --out C:\\eng\\deliverables").Example("ws01.enriched.ptb --plain --formats html,pdf"));
+            l[l.Count - 1].Run = Report_;
+
             l.Add(new CliTool("firewall").Opt("inbound", null, "inbound rules only").Opt("outbound", null, "outbound rules only").Opt("risky", null, "flagged rules only").Opt("enabled", null, "enabled rules only")
                 .Example("--risky").Example("--inbound --enabled --where \"action equals allow\" --sort name"));
             l[l.Count - 1].Run = Firewall_; l[l.Count - 1].Tables = delegate { return new List<TableDef>(new TableDef[] { Columns.FirewallRules() }); };
@@ -490,6 +495,30 @@ namespace PSTools
             if (!a.Has(name)) return null; DateTime d;
             if (!DateTime.TryParse(a.Get(name, ""), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out d)) throw new UsageException("--" + name + ": give a UTC date like 2026-10-01 or 2026-10-01T09:00Z");
             return d;
+        }
+
+        // ═══════════════════════════════ Report (enriched bundle in, deliverables out) ═══════════════════════════
+        static int Report_(Args a)
+        {
+            ToolInfo info = Tools.ByKey("report"); Out.Header(info);
+            string inPath = a.Get("in", a.Positional.Count > 0 ? a.Positional[0] : null); if (inPath == null) throw new UsageException("--in <enriched bundle.ptb>, or give it as the first argument"); if (!File.Exists(inPath)) throw new UsageException("--in: no such file: " + inPath);
+            BundleKey open, seal; Engagement eng; BundleKeys(a, out open, out seal, out eng);
+            Bundle b; try { b = Bundle.Load(inPath, open); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+            a.Choice("kind", "vulnerability", "vulnerability"); Brand brand = Brand.Load(a.Has("brand") ? Cli.FullFolder(a.Get("brand", "")) : Brand.DefaultDir);
+            List<string> formats = new List<string>(); foreach (string f in a.Get("formats", "json,csv,md,html,pdf").Split(',')) { string t = f.Trim().ToLowerInvariant(); if (t.Length == 0) continue; if (Array.IndexOf(new string[] { "json", "csv", "md", "html", "pdf" }, t) < 0) throw new UsageException("--formats: unknown format '" + t + "' (json, csv, md, html, pdf)"); if (!formats.Contains(t)) formats.Add(t); }
+            if (formats.Count == 0) throw new UsageException("--formats: nothing to write");
+            Dictionary<string, object> r; try { r = VulnReport.Build(b, brand); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+            if (!a.Has("no-validate"))
+            {
+                List<string> errs; try { errs = Ptreport.Validate(r); } catch (BundleException ex) { Out.Warn("schema check skipped: " + ex.Message); errs = new List<string>(); }
+                if (errs.Count > 0) { Out.Error("the report does not meet " + Ptreport.Schema + ": " + string.Join("; ", errs.GetRange(0, Math.Min(5, errs.Count)).ToArray()) + (errs.Count > 5 ? " (+" + (errs.Count - 5) + " more)" : "")); return Cli.PROBLEMS; }
+            }
+            string dir = a.Has("out") ? Cli.FullFolder(a.Get("out", "")) : Cli.ReportsDir(); List<string> written;
+            try { written = ReportRender.WriteAll(r, brand, dir, formats); } catch (Exception ex) { if (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException) throw new UsageException("--out: cannot write to " + dir + ": " + ex.Message); throw; }
+            object sum = Json.Get(r, "summary"); int openN = JsonWrite.Int(Json.Get(sum, "open"), 0), crit = JsonWrite.Int(Json.Get(sum, "critical"), 0), high = JsonWrite.Int(Json.Get(sum, "high"), 0), kev = JsonWrite.Int(Json.Get(sum, "knownExploited"), 0);
+            Out.Cards("host", b.Host, "open", T(openN.ToString(), GoodIfZero(openN)), "critical", T(crit.ToString(), GoodIfZero(crit)), "high", T(high.ToString(), GoodIfZero(high)), "known exploited", T(kev.ToString(), GoodIfZero(kev)), "patched", JsonWrite.Int(Json.Get(sum, "patched"), 0), "unconfirmed", JsonWrite.Int(Json.Get(sum, "unconfirmed"), 0));
+            Out.Line("  " + (Json.GetS(sum, "headline") ?? ""), Tone.Dim); foreach (string w in written) Out.Line("  " + w);
+            Out.Ok(written.Count + " deliverable(s) · " + Ptreport.Schema + " · brand " + brand.Name + " · bundle " + b.RunId + " enriched " + (Json.GetS(b.Manifest, "enriched", "utc") ?? "?")); return Cli.OK;
         }
 
         static int Firewall_(Args a)

@@ -66,12 +66,12 @@ namespace PSTools
         public static Dictionary<string, object> Finding(Finding f)
         {
             Dictionary<string, object> d = D(); d["cve"] = f.Cve; d["title"] = f.Title; d["severity"] = f.Severity; d["severityNorm"] = f.SeverityNorm; d["source"] = f.Source; d["product"] = f.Product; d["installed"] = f.Installed; d["fix"] = f.Fix; d["status"] = f.Status; d["open"] = f.Open;
-            d["evidence"] = f.Evidence; d["description"] = f.Description; d["url"] = f.Url; d["release"] = f.Release; d["cvss"] = f.Cvss.HasValue ? (object)f.Cvss.Value : null; d["epss"] = f.Epss.HasValue ? (object)f.Epss.Value : null; d["kev"] = f.Kev; d["exploited"] = f.Exploited; d["ransomware"] = f.Ransomware; d["kevDue"] = f.KevDue; return d;
+            d["evidence"] = f.Evidence; d["description"] = f.Description; d["url"] = f.Url; d["release"] = f.Release; d["cvss"] = f.Cvss.HasValue ? (object)f.Cvss.Value : null; d["epss"] = f.Epss.HasValue ? (object)f.Epss.Value : null; d["kev"] = f.Kev; d["exploited"] = f.Exploited; d["ransomware"] = f.Ransomware; d["kevDue"] = f.KevDue; d["validated"] = f.Validated; return d;
         }
         public static Finding FindingFrom(object t)
         {
             Finding f = new Finding(); f.Cve = S(t, "cve"); f.Title = S(t, "title"); f.Severity = S(t, "severity"); f.Source = S(t, "source"); f.Product = S(t, "product"); f.Installed = S(t, "installed"); f.Fix = S(t, "fix"); f.Status = S(t, "status");
-            f.Evidence = S(t, "evidence"); f.Description = S(t, "description"); f.Url = S(t, "url"); f.Release = S(t, "release"); f.Cvss = N(t, "cvss"); f.Epss = N(t, "epss"); f.Kev = B(t, "kev"); f.Exploited = B(t, "exploited"); f.Ransomware = B(t, "ransomware"); f.KevDue = S(t, "kevDue"); return f;
+            f.Evidence = S(t, "evidence"); f.Description = S(t, "description"); f.Url = S(t, "url"); f.Release = S(t, "release"); f.Cvss = N(t, "cvss"); f.Epss = N(t, "epss"); f.Kev = B(t, "kev"); f.Exploited = B(t, "exploited"); f.Ransomware = B(t, "ransomware"); f.KevDue = S(t, "kevDue"); string val = Json.GetS(t, "validated"); if (val == "confirmed" || val == "not exploitable" || val == "untested") f.Validated = val; return f;
         }
         public static Dictionary<string, object> Check(CheckItem c) { Dictionary<string, object> d = D(); d["id"] = c.Id; d["category"] = c.Category; d["name"] = c.Name; d["question"] = c.Question; d["status"] = c.Status; d["detail"] = c.Detail; d["evidence"] = c.Evidence; return d; }
         public static CheckItem CheckFrom(object t) { CheckItem c = new CheckItem(S(t, "category"), S(t, "name"), S(t, "question"), S(t, "status"), S(t, "detail"), S(t, "evidence")); c.Id = S(t, "id"); return c; }

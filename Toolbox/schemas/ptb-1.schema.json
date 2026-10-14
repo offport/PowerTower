@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ptb-1.schema.json",
+  "title": "PowerTower collection bundle (ptb/1): a manifest plus named sections; sections are open trees, the manifest is fixed.",
+  "type": "object",
+  "required": ["manifest"],
+  "properties": {
+    "manifest": {
+      "type": "object",
+      "required": ["schema", "runId", "host", "platform", "modules"],
+      "properties": {
+        "schema": { "const": "ptb/1" },
+        "runId": { "type": "string" },
+        "engagementId": { "type": "string" },
+        "host": { "type": "string" },
+        "domain": { "type": "string" },
+        "platform": { "enum": ["windows", "linux"] },
+        "mode": { "enum": ["live", "image"] },
+        "collector": { "type": "object" },
+        "startedUtc": { "type": "string" },
+        "finishedUtc": { "type": "string" },
+        "durationMs": { "type": "number" },
+        "user": { "type": "string" },
+        "elevated": { "type": "boolean" },
+        "privilegeTier": { "enum": ["A", "B"] },
+        "modules": { "type": "array", "items": { "type": "object", "required": ["name", "status"], "properties": { "name": { "type": "string" }, "status": { "enum": ["ok", "partial", "skipped", "failed"] }, "count": { "type": "number" }, "durationMs": { "type": "number" }, "errors": { "type": "array", "items": { "type": "string" } } } } },
+        "enriched": { "type": "object" }
+      }
+    },
+    "inventory": { "type": "object" },
+    "checklist": { "type": "object" },
+    "recon": { "type": "object" },
+    "persistence": { "type": "object" },
+    "events": { "type": "object" },
+    "network": { "type": "object" },
+    "secrets": { "type": "object" },
+    "ioc": { "type": "object" },
+    "findings": { "type": "object" }
+  }
+}

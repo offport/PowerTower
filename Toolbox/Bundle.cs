@@ -312,8 +312,9 @@ namespace PSTools
                 if (s == null || s.Trim().Length == 0) { l.Add("scope has an empty entry"); continue; }
                 if (s != s.Trim()) { l.Add("scope entry '" + s + "' has leading or trailing whitespace"); continue; }
                 if (s == "*") continue; IPAddress ip; int bits;
-                if (s.IndexOf('/') >= 0) { if (!Cidr(s, out ip, out bits)) l.Add("scope entry '" + s + "' is not a valid CIDR"); }
-                else if (!HostOrIp(s)) l.Add("scope entry '" + s + "' is not a host name or IP");
+                if (s.IndexOf('/') >= 0) { if (!Cidr(s, out ip, out bits)) l.Add("scope entry '" + s + "' is not a valid CIDR (canonical network address and prefix length)"); }
+                else if (LooksLikeIp(s) || IPAddress.TryParse(s, out ip)) { if (!CanonicalIp(s, out ip)) l.Add("scope entry '" + s + "' is not a canonical IP address (dotted quad with no leading zeros, or a normalised IPv6 address)"); }
+                else if (!HostName(s)) l.Add("scope entry '" + s + "' is not a host name or IP");
             }
             foreach (string m in Modules) if (m == null || Array.IndexOf(Collector.AllModules, m.ToLowerInvariant()) < 0) l.Add("module '" + m + "' is unknown");
             if (!WindowStartUtc.HasValue || !WindowEndUtc.HasValue) l.Add("the time window needs both windowStartUtc and windowEndUtc");
@@ -328,7 +329,9 @@ namespace PSTools
             string t = (target ?? "").Trim(); why = "";
             if (t.Length == 0) { why = "no target"; return false; }
             if (Scope.Count == 0) { why = "the engagement scope is empty"; return false; }
-            IPAddress ip; bool isIp = IPAddress.TryParse(t, out ip);
+            // only a canonical address can be matched against a CIDR: "10.1", "010.0.0.1" or "0xA.0.0.1" are read by .NET as 10.0.0.1 / 8.0.0.1 / 10.0.0.1, which other parsers read differently (PT-28)
+            IPAddress ip; bool isIp = CanonicalIp(t, out ip);
+            IPAddress lenient; if (!isIp && (LooksLikeIp(t) || IPAddress.TryParse(t, out lenient))) { why = "'" + t + "' is not a canonical IP address - write it as a dotted quad with no leading zeros"; return false; }
             foreach (string s in Scope)
             {
                 if (s == "*") return true;
@@ -353,11 +356,20 @@ namespace PSTools
         /// <summary>The private key XML out of its DPAPI wrapper (this Windows user, this machine, this engagement id).</summary>
         public static string PrivateKey(Engagement e, string keyFile) { return Encoding.UTF8.GetString(BundleCrypto.Unprotect(System.IO.File.ReadAllBytes(keyFile), e.Id)); }
 
-        static bool HostOrIp(string s) { foreach (char ch in s) if (!(char.IsLetterOrDigit(ch) || ch == '.' || ch == '-' || ch == '_' || ch == ':')) return false; return true; }
+        /// <summary>Digits and dots only, or anything with a colon: meant as an address, so it must be canonical - never a host name.</summary>
+        static bool LooksLikeIp(string s) { if (s.IndexOf(':') >= 0) return true; bool digit = false; foreach (char ch in s) { if (char.IsDigit(ch)) digit = true; else if (ch != '.') return false; } return digit; }
+        /// <summary>An address exactly as .NET would print it back: a dotted quad with four parts and no leading zeros, or a normalised IPv6 address (lower-case, compressed). Nothing .NET merely tolerates.</summary>
+        public static bool CanonicalIp(string s, out IPAddress ip)
+        {
+            ip = null; if (string.IsNullOrEmpty(s) || !IPAddress.TryParse(s, out ip)) return false;
+            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork) { string[] q = s.Split('.'); if (q.Length != 4) return false; foreach (string p in q) if (p.Length == 0 || p.Length > 3 || (p.Length > 1 && p[0] == '0')) return false; }
+            return ip.ToString() == s;
+        }
+        static bool HostName(string s) { bool letter = false; foreach (char ch in s) { if (char.IsLetter(ch)) letter = true; if (!(char.IsLetterOrDigit(ch) || ch == '.' || ch == '-' || ch == '_')) return false; } return letter; }
         static bool Cidr(string spec, out IPAddress net, out int bits)
         {
             net = null; bits = -1; int i = spec.IndexOf('/'); if (i < 0) return false;
-            if (!IPAddress.TryParse(spec.Substring(0, i), out net) || !int.TryParse(spec.Substring(i + 1), out bits)) return false;
+            if (!CanonicalIp(spec.Substring(0, i), out net) || !int.TryParse(spec.Substring(i + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out bits)) return false;
             int max = net.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? 128 : 32; return bits >= 0 && bits <= max;
         }
         static bool InCidr(IPAddress ip, IPAddress net, int bits)

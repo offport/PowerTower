@@ -7,6 +7,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace PSTools
@@ -20,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -512,6 +513,7 @@ namespace PSTools
             // the writer is the twin of the parser: a tree survives write → parse → write unchanged
             Dictionary<string, object> t = new Dictionary<string, object>(); t["s"] = "q\"\\ é\n\t"; t["n"] = 2.5; t["i"] = 42; t["b"] = true; t["z"] = null; t["l"] = new List<object>(new object[] { 1, "x", false, null }); Dictionary<string, object> inner = new Dictionary<string, object>(); inner["k"] = -3e2; t["o"] = inner; t["d"] = new DateTime(2026, 10, 13, 7, 4, 5, DateTimeKind.Utc); t["e"] = new List<object>();
             Check(JsonWrite.Int(42, 0) == 42 && JsonWrite.Int(42.0, 0) == 42 && JsonWrite.Int("7", 0) == 7 && JsonWrite.Int("x", -1) == -1 && Json.S(5) == "5" && JsonWrite.Date(new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc)).HasValue, "json read: boxed ints, doubles and numeric strings all read as numbers; a boxed DateTime reads as a date (trees built in-process, not only parsed ones)");
+            Check(Json.Arr(new List<string>(new string[] { "a", "b" })).Count == 2 && Json.Arr(new string[] { "x" }).Count == 1 && Json.Arr("str").Count == 0 && Json.Arr(new Dictionary<string, object>()).Count == 0 && Json.S(new DateTime(2026, 10, 13, 9, 0, 0, DateTimeKind.Utc)) == "2026-10-13T09:00:00Z" && JsonWrite.Strings(new List<string>(new string[] { "k" }))[0] == "k", "json read: in-process lists (List<string>, arrays) and boxed DateTimes read like their JSON forms; strings and objects are not arrays");
             string j1 = JsonWrite.Text(t, true); string j2 = JsonWrite.Text(Json.Parse(j1), true);
             Check(j1 == j2 && j1.Contains("\"d\": \"2026-10-13T07:04:05Z\"") && JsonWrite.Text(t, false).IndexOf('\n') < 0 && (string)Json.Get(Json.Parse(j1), "s") == "q\"\\ é\n\t", "json write: tree → text → parse → text is stable; dates are ISO UTC; compact form has no newlines; escapes round-trip");
             Bundle b = new Bundle(); b.Manifest["host"] = "HOST1"; b.Manifest["runId"] = "r1"; b.Manifest["platform"] = "windows"; Dictionary<string, object> inv = new Dictionary<string, object>(); inv["os"] = "Windows 11"; b["inventory"] = inv; b.Module("inventory", "ok", 1, 12, null);
@@ -883,7 +885,97 @@ namespace PSTools
                 }
                 File.WriteAllText(mf, manifest, new UTF8Encoding(false));
                 Check(wrongT.Count == 0, "PT-35/36: modifiedUtc before 1601, in the future or unparseable is refused BEFORE the file is copied - kev.json absent, named in the problems, the other " + (nFiles - 1) + " imported (manifest stamp " + kevStamp + ")" + (wrongT.Count > 0 ? " wrong: " + string.Join("; ", wrongT.ToArray()) : ""));
+                // PT-28: only canonical addresses, in scope entries and as targets
+                Engagement sc = new Engagement(); sc.Id = "S"; sc.WindowStartUtc = now; sc.WindowEndUtc = now.AddDays(1); sc.Scope.AddRange(new string[] { "10.0.0.0/24", "192.168.5.7", "fe80::1", "ws-fin-01" });
+                Check(sc.Validate().Count == 0, "PT-28: canonical dotted quads, a normalised IPv6, a CIDR and a host name validate (" + string.Join("; ", sc.Validate().ToArray()) + ")");
+                List<string> accepted = new List<string>(); foreach (string badIp in new string[] { "10.1", "010.0.0.1", "10.0.0.256", "0xA.0.0.1", "10.0.0.1.", "010.0.0.0/8", "10.0.0.0/33", "10.0.0.0/+8", "FE80::1", "1.2.3" }) { Engagement x = new Engagement(); x.Id = "X"; x.WindowStartUtc = now; x.WindowEndUtc = now.AddDays(1); x.Scope.Add(badIp); if (x.Validate().Count == 0) accepted.Add(badIp); }
+                Check(accepted.Count == 0, "PT-28: 10.1, 010.0.0.1, 10.0.0.256, 0xA.0.0.1, trailing dot, non-canonical or malformed CIDRs and upper-case IPv6 are refused by Validate" + (accepted.Count > 0 ? " (accepted: " + string.Join(", ", accepted.ToArray()) + ")" : ""));
+                string whyS; Check(sc.InScope("10.0.0.1", out whyS) && !sc.InScope("10.1", out whyS) && whyS.Contains("canonical") && !sc.InScope("010.0.0.5", out whyS) && !sc.InScope("0xA.0.0.1", out whyS) && !sc.InScope("2130706433", out whyS) && sc.InScope("WS-FIN-01", out whyS) && sc.InScope("fe80::1", out whyS), "PT-28: '10.1', '010.0.0.5', '0xA.0.0.1' and a decimal integer never match the 10.0.0.0/24 scope; canonical addresses and host names still do");
+                // PT-36 remainder: a pack entry without modifiedUtc is refused, never given the file's own time
+                string noTime = File.ReadAllText(mf); int km = noTime.IndexOf("\"name\": \"kev.json\""); int ms2 = noTime.IndexOf("\"modifiedUtc\": \"", km); noTime = noTime.Substring(0, ms2) + "\"notTheTime\": \"" + noTime.Substring(ms2 + 16);   // rename the key: the entry keeps a value but no modifiedUtc
+                string impNT = Path.Combine(dir, "t-notime"); File.WriteAllText(mf, noTime, new UTF8Encoding(false)); FeedPack.Result rNT = FeedPack.Import(pack, new FeedCache(impNT), true); File.WriteAllText(mf, manifest, new UTF8Encoding(false));
+                bool saidNT = false; foreach (string p in rNT.Problems) if (p.StartsWith("kev.json") && p.Contains("missing")) saidNT = true;
+                Check(saidNT && !File.Exists(Path.Combine(impNT, "kev.json")) && rNT.Skipped == 1 && rNT.Files == nFiles - 1, "PT-36: an entry with no modifiedUtc is refused before copying - kev.json absent, the other " + (nFiles - 1) + " imported (" + (rNT.Problems.Count > 0 ? rNT.Problems[0] : "") + ")");
                 // [fail-closed: next]
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        // ── Phase 2: the ptreport/1 contract, its schema, and the Vulnerability report built from an enriched bundle ──
+        /// <summary>A stale fixture host, enriched offline against the seeded feeds, with every wall-clock stamp pinned so reports are reproducible. hostileProduct replaces the 7-Zip display name to test escaping.</summary>
+        static Bundle EnrichedFixture(string dir, DateTime now, string hostileProduct)
+        {
+            FeedCache cache = SeedFeeds(dir, now); Bundle b = FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc)); b.Manifest["finishedUtc"] = new DateTime(2026, 10, 13, 8, 0, 0, DateTimeKind.Utc); b.Manifest["privilegeTier"] = "A"; b.Manifest["mode"] = "live";
+            if (hostileProduct != null) Json.Obj(Json.Arr(Json.Get(b["inventory"], "software"))[0])["name"] = hostileProduct;
+            VulnEnrich dry = EnrichBundle.From(b, cache); dry.Now = now; dry.DoEpss = false; dry.Run(); List<string> ids = new List<string>(); foreach (Finding f in dry.Findings) if (f.Open || f.Status == "unconfirmed") ids.Add(f.Cve);
+            cache.Write(Epss.CacheName(ids), "{\"data\":[{\"cve\":\"CVE-2026-1003\",\"epss\":\"0.42\",\"date\":\"2026-10-12\"},{\"cve\":\"CVE-2022-29072\",\"epss\":\"0.01\",\"date\":\"2026-10-12\"}]}");
+            VulnEnrich e = EnrichBundle.From(b, cache); e.Now = now; e.Run(); EnrichBundle.Apply(b, e);
+            DateTime pinned = new DateTime(2026, 10, 13, 9, 0, 0, DateTimeKind.Utc); Json.Obj(b.Manifest["enriched"])["utc"] = pinned; Json.Obj(Json.Get(b["findings"], "asOf"))["enrichedUtc"] = pinned;
+            return b;
+        }
+        static void Ptreport_()
+        {
+            // the validator itself, on a tiny schema
+            object tiny = Json.Parse("{\"type\":\"object\",\"required\":[\"a\"],\"additionalProperties\":false,\"properties\":{\"a\":{\"type\":\"integer\",\"minimum\":1},\"b\":{\"enum\":[\"x\",\"y\"]},\"c\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/s\"}}},\"definitions\":{\"s\":{\"type\":\"string\",\"pattern\":\"^k\"}}}");
+            List<string> ok = JsonSchema.Validate(tiny, Json.Parse("{\"a\":1,\"b\":\"x\",\"c\":[\"k1\",\"k2\"]}")), bad = JsonSchema.Validate(tiny, Json.Parse("{\"a\":0.5,\"b\":\"z\",\"c\":[\"no\"],\"d\":1}")), miss = JsonSchema.Validate(tiny, Json.Parse("{\"b\":\"x\"}"));
+            Check(ok.Count == 0 && bad.Count == 4 && miss.Count == 1 && miss[0].Contains("'a'"), "ptreport: the schema validator enforces type, integer, minimum, enum, pattern via $ref, required and additionalProperties (valid 0, hostile " + bad.Count + ", missing " + miss.Count + ": " + string.Join(" | ", bad.ToArray()) + ")");
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-ptr-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                Bundle b = EnrichedFixture(dir, new DateTime(2026, 10, 13), null); Brand brand = new Brand();
+                Check(JsonSchema.Validate(Ptreport.LoadSchema("ptb-1.schema.json"), Json.Parse(b.ToJson(false))).Count == 0 && Json.GetS(b.Manifest, "platform") == "windows" && Json.GetS(b.Manifest, "mode") == "live", "ptb/1: the enriched fixture bundle validates against schemas\\ptb-1.schema.json; manifest carries platform and mode");
+                Dictionary<string, object> r = VulnReport.Build(b, brand); List<string> errs = Ptreport.Validate(r);
+                Check(errs.Count == 0, "ptreport: the Vulnerability report validates against schemas\\ptreport-1.schema.json (" + errs.Count + " problem(s)" + (errs.Count > 0 ? ": " + string.Join(" | ", errs.GetRange(0, Math.Min(4, errs.Count)).ToArray()) : "") + ")");
+                List<object> rows = Json.Arr(Json.Get(r, "rows")), un = Json.Arr(Json.Get(r, "unconfirmed")); HashSet<string> ids = new HashSet<string>(); bool shape = rows.Count > 0; double prev = double.MaxValue; bool ordered = true, openFirst = true, seenPatched = false;
+                foreach (List<object> set in new List<object>[] { rows, un }) foreach (object row in set) { foreach (string k in new string[] { "id", "severity", "status", "evidence", "frameworkRefs", "asOf", "validated" }) if (Json.Get(row, k) == null) shape = false; string id = Json.GetS(row, "id") ?? ""; if (!id.StartsWith("PT-W-VULN-") || !ids.Add(id)) shape = false; if (Json.GetS(row, "validated") != "untested" || Json.Arr(Json.Get(row, "frameworkRefs")).Count != 3) shape = false; }
+                foreach (object row in rows) { double sc = Json.N(Json.Get(row, "score")).Value; if (sc > prev) ordered = false; prev = sc; bool open = JsonWrite.Bool(Json.Get(row, "open")); if (!open) seenPatched = true; else if (seenPatched) openFirst = false; }
+                Check(shape, "ptreport: every row (open, patched and unconfirmed) carries id, severity, status, evidence, 3 frameworkRefs, asOf and validated=untested; ids are PT-W-VULN-… and unique");
+                Check(ordered && openFirst && Json.GetS(rows[0], "cve") == "CVE-2026-1003" && JsonWrite.Bool(Json.Get(rows[0], "kev")) && Json.N(Json.Get(rows[0], "rank")) == 1, "ptreport: rows are risk-ranked by SortScore (open first, KEV first: CVE-2026-1003 is rank 1), never increasing");
+                object sum = Json.Get(r, "summary"); Check(JsonWrite.Int(Json.Get(sum, "open"), -1) == 17 && JsonWrite.Int(Json.Get(sum, "patched"), -1) == 1 && JsonWrite.Int(Json.Get(sum, "unconfirmed"), -1) == 1 && JsonWrite.Int(Json.Get(sum, "knownExploited"), -1) == 1 && JsonWrite.Int(Json.Get(sum, "total"), -1) == 18 && un.Count == 1 && Json.GetS(un[0], "cve") == "CVE-2000-0002" && JsonWrite.Int(Json.Get(sum, "msrcWindow"), 0) == 16, "ptreport: summary 17 open / 1 patched / 1 unconfirmed (CVE-2000-0002 listed separately) / 1 known exploited / window 16");
+                List<object> bu = Json.Arr(Json.Get(r, "remediation", "byUpdate")), bp = Json.Arr(Json.Get(r, "remediation", "byProduct"));
+                Check(bu.Count == 15 && (Json.GetS(bu[0], "kb") ?? "").StartsWith("KB507") && bp.Count == 1 && Json.Arr(Json.Get(bp[0], "cves")).Count == 2 && Json.GetS(bp[0], "worstSeverity") == "High", "ptreport: remediation groups 15 Microsoft updates by KB and one third-party product with 2 CVEs (worst High)");
+                object sub = Json.Get(r, "subject"); Check(Json.GetS(sub, "platform") == "windows" && Json.GetS(sub, "mode") == "live" && Json.GetS(sub, "enrichedUtc") == "2026-10-13T09:00:00Z" && Json.GetS(sub, "collectedUtc") == "2026-10-13T08:00:00Z" && Json.GetS(Json.Get(r, "asOf"), "kev", "catalogVersion") == "2026.10.13" && JsonWrite.Strings(Json.Get(r, "method", "limitations")).Count >= 4, "ptreport: subject (platform, mode, pinned collected/enriched times), the feed as-of block and the limitations are present");
+                // a report that breaks the contract is caught
+                Dictionary<string, object> broken = Json.Obj(Json.Parse(JsonWrite.Text(r, false))); Json.Obj(Json.Arr(broken["rows"])[0]).Remove("id"); Json.Obj(Json.Arr(broken["rows"])[1])["severity"] = "Bogus"; broken["schema"] = "ptreport/2"; broken["extra"] = 1;
+                List<string> be = JsonSchema.Validate(Ptreport.LoadSchema("ptreport-1.schema.json"), broken); Check(be.Count == 4, "ptreport: a missing row id, a bad severity, a wrong schema tag and an unknown top-level key are 4 named violations (" + string.Join(" | ", be.ToArray()) + ")");
+                string err = ""; try { VulnReport.Build(FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc)), brand); } catch (BundleException ex) { err = ex.Message; } Check(err.Contains("findings"), "ptreport: a bundle that was never enriched is refused with a reason");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        static bool SameBytes(string a, string b) { byte[] x = File.ReadAllBytes(a), y = File.ReadAllBytes(b); if (x.Length != y.Length) return false; for (int i = 0; i < x.Length; i++) if (x[i] != y[i]) return false; return true; }
+        static void Report_()
+        {
+            DateTime now = new DateTime(2026, 10, 13); string dir = Path.Combine(Path.GetTempPath(), "pstools-rep-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                // a product name that is at once a spreadsheet formula, HTML, a Markdown table breaker and quote soup; a host name with markup
+                string hostile = "=HYPERLINK(\"http://evil.example\",\"x\") <script>alert(1)</script> & 7-Zip | 21.07 'q' \u202Ertl";
+                Bundle b = EnrichedFixture(dir, now, hostile); b.Manifest["host"] = "WS-<b>FIN</b>-01";
+                Brand brand = Brand.Load(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "brand"));
+                Check(brand.Name == "Offport" && Brand.Embeddable(brand.LogoSvg) && brand.Severity["Critical"] == "#C4231B", "report: the Offport brand kit loads (brand.json + an embeddable logo SVG)");
+                Check(!Brand.Embeddable("<svg xmlns=\"http://www.w3.org/2000/svg\"><script>1</script></svg>") && !Brand.Embeddable("<svg><image href=\"http://x/y.png\"/></svg>") && !Brand.Embeddable("<svg onload=\"x()\"></svg>") && Brand.Embeddable("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>"), "report: a logo SVG with script, image/href or an event handler is never embedded");
+                Dictionary<string, object> r = VulnReport.Build(b, brand); string out1 = Path.Combine(dir, "out1"), out2 = Path.Combine(dir, "out2"); string[] fmts = { "json", "csv", "md", "html", "pdf" };
+                List<string> f1 = ReportRender.WriteAll(r, brand, out1, fmts); List<string> f2 = ReportRender.WriteAll(VulnReport.Build(b, brand), brand, out2, fmts);
+                bool allThere = f1.Count == 5; foreach (string f in f1) if (!File.Exists(f) || new FileInfo(f).Length < 200) allThere = false;
+                Check(allThere && Path.GetFileName(f1[0]) == "WS--b-FIN--b--01_fx1_vulnerability.json", "report: five deliverables written with deterministic, safe file names (" + Path.GetFileName(f1[0]) + ")");
+                bool same = true; for (int i = 0; i < f1.Count; i++) if (!SameBytes(f1[i], f2[i])) same = false; Check(same, "report: a second render of the same bundle is byte-identical in every format (golden reproducibility)");
+                string json = File.ReadAllText(f1[0]), csv = File.ReadAllText(f1[1]), md = File.ReadAllText(f1[2]), html = File.ReadAllText(f1[3]); byte[] pdf = File.ReadAllBytes(f1[4]);
+                Check(JsonSchema.Validate(Ptreport.LoadSchema("ptreport-1.schema.json"), Json.Parse(json)).Count == 0 && json.Contains("<script>alert(1)</script>") && json.Contains("WS-<b>FIN</b>-01"), "report json: validates, and keeps the hostile strings verbatim (the source of truth is not where escaping belongs)");
+                Check(csv.Contains("'=HYPERLINK") && !Regex.IsMatch(csv, "(^|,)\"?=HYPERLINK", RegexOptions.Multiline) && csv.StartsWith("rank,id,severity") && csv.Split('\n').Length >= 19, "report csv: the formula cell is neutralised with a leading apostrophe and quoted; header + 18 rows");
+                Check(html.Contains("&lt;script&gt;alert(1)&lt;/script&gt;") && !html.Contains("<script>") && html.Contains("WS-&lt;b&gt;FIN&lt;/b&gt;-01") && !html.Contains("WS-<b>FIN") && html.Contains("&#39;q&#39;") && !Regex.IsMatch(html, "(href|src)\\s*=\\s*[\"']\\s*https?:", RegexOptions.IgnoreCase) && !html.Contains("<link") && html.Contains("<svg") && html.Contains("@media print") && html.Contains("stroke=\"#0FAA04\"") && html.Contains("CVE-2026-1003") && html.Contains("class=\"kev\""), "report html: every client-controlled string escaped, no external href/src/link, inline Offport SVG, print stylesheet, KEV row present");
+                Check(md.Contains("\\|") && md.Contains("&lt;script&gt;") && !md.Contains("<script>") && md.StartsWith("# Endpoint Vulnerability Report"), "report md: pipes and angle brackets escaped, title present");
+                string pdfText = Encoding.GetEncoding(1252).GetString(pdf); int pages = Regex.Matches(pdfText, "/Type /Page ").Count;
+                Check(pdf.Length > 3000 && pdfText.StartsWith("%PDF-1.4") && pdfText.TrimEnd().EndsWith("%%EOF") && pages >= 1 && pdfText.Contains("/Helvetica-Bold") && pdfText.Contains("Page 1 of " + pages) && pdfText.Contains(" re f") && pdfText.Contains("<script>alert\\(1\\)</script>") && !pdfText.Contains("alert(1)"), "report pdf: PDF 1.4, " + pages + " page(s), Helvetica, filled chips, page numbers; hostile text stays inside its string operand (parentheses escaped, nothing can end the operand early)");
+                // the real tool, twice, offline: identical outputs, exit 0; a never-enriched bundle is refused
+                string cli = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe"); string inP = Path.Combine(dir, "in.ptb"); b.Save(inP, BundleKey.None());
+                if (File.Exists(cli))
+                {
+                    int x1; string o1 = RunCli(cli, "report \"" + inP + "\" --plain --out \"" + Path.Combine(dir, "c1") + "\" --no-color", out x1); int x2; string o2 = RunCli(cli, "report \"" + inP + "\" --plain --out \"" + Path.Combine(dir, "c2") + "\" --no-color --quiet", out x2);
+                    bool cliSame = x1 == 0 && x2 == 0; foreach (string f in fmts) { string p1 = Path.Combine(dir, "c1", "WS--b-FIN--b--01_fx1_vulnerability." + f), p2 = Path.Combine(dir, "c2", "WS--b-FIN--b--01_fx1_vulnerability." + f); if (!File.Exists(p1) || !File.Exists(p2) || !SameBytes(p1, p2)) cliSame = false; }
+                    string noF = Path.Combine(dir, "nof.ptb"); FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc)).Save(noF, BundleKey.None()); int x3; string o3 = RunCli(cli, "report \"" + noF + "\" --plain --out \"" + Path.Combine(dir, "c3") + "\" --no-color", out x3);
+                    int x4; string o4 = RunCli(cli, "report \"" + inP + "\" --plain --formats html,bogus --no-color", out x4);
+                    Check(cliSame && x3 == 1 && o3.Contains("findings") && x4 == 2 && o4.Contains("--formats"), "report CLI: two runs give identical files (exit " + x1 + "/" + x2 + "); a never-enriched bundle exits 1 naming the reason (" + x3 + "); an unknown format is a usage error (" + x4 + ")");
+                }
+                else Check(false, "report CLI: PowerTowerCli.exe not found next to Tests.exe");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
