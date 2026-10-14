@@ -29,12 +29,16 @@
     "asOf": { "type": "object" },
     "summary": {
       "type": "object",
-      "required": ["open", "patched", "total", "critical", "high", "medium", "low", "knownExploited", "unconfirmed"],
+      "required": ["open", "patched", "total", "critical", "high", "medium", "low", "knownExploited", "unconfirmed", "status", "assessable", "coverage"],
       "properties": {
         "open": { "type": "integer", "minimum": 0 }, "patched": { "type": "integer", "minimum": 0 }, "total": { "type": "integer", "minimum": 0 },
         "critical": { "type": "integer", "minimum": 0 }, "high": { "type": "integer", "minimum": 0 }, "medium": { "type": "integer", "minimum": 0 }, "low": { "type": "integer", "minimum": 0 },
         "knownExploited": { "type": "integer", "minimum": 0 }, "unconfirmed": { "type": "integer", "minimum": 0 },
-        "msrcWindow": { "type": "integer", "minimum": 0 }, "releases": { "type": "array", "items": { "type": "string" } }, "headline": { "type": "string" }
+        "msrcWindow": { "type": "integer", "minimum": 0 }, "releases": { "type": "array", "items": { "type": "string" } }, "headline": { "type": "string" },
+      "status": { "enum": ["assessed", "incomplete-coverage", "not-assessable"] }, "assessable": { "type": "boolean" }, "unrated": { "type": "integer", "minimum": 0 },
+      "coverage": { "type": "object", "required": ["status", "releasesChecked", "releasesExpected", "feedsUnavailable", "problems", "text"], "properties": {
+        "status": { "enum": ["assessed", "incomplete-coverage", "not-assessable"] }, "releasesChecked": { "type": "integer", "minimum": 0 }, "releasesExpected": { "type": "integer", "minimum": 0 },
+        "feedsUnavailable": { "type": "array", "items": { "type": "string" } }, "problems": { "type": "integer", "minimum": 0 }, "text": { "type": "string" } } }
       }
     },
     "rows": { "type": "array", "items": { "$ref": "#/definitions/row" } },

@@ -132,14 +132,17 @@ namespace PSTools
         public static Dictionary<string, object> Build(Bundle b, Brand brand)
         {
             object fd = b["findings"]; if (fd == null) throw new BundleException("the bundle has no findings section - run `enrich` on it first");
+            // PT-45: a findings section of the wrong shape is refused, never read as an empty (clean) result
+            if (Json.Obj(fd) == null) throw new BundleException("the bundle's findings section is not an object - run `enrich` on it again");
+            if (!(Json.Get(fd, "items") is System.Collections.IList)) throw new BundleException("the bundle's findings.items is not a list - run `enrich` on it again");
             object inv = b["inventory"]; OsInfo os = Codec.OsFrom(Json.Get(inv, "os"));
-            Dictionary<string, object> asOf = Json.Obj(Json.Get(fd, "asOf")) ?? new Dictionary<string, object>();
+            Dictionary<string, object> asOfRaw = Json.Obj(Json.Get(fd, "asOf")); bool haveAsOf = asOfRaw != null; Dictionary<string, object> asOf = asOfRaw ?? new Dictionary<string, object>();
             string enrichedUtc = Json.GetS(b.Manifest, "enriched", "utc") ?? Json.GetS(asOf, "enrichedUtc") ?? "", collectedUtc = Json.GetS(b.Manifest, "finishedUtc") ?? Json.GetS(b.Manifest, "startedUtc") ?? "";
             List<Finding> all = new List<Finding>(); foreach (object it in Json.Arr(Json.Get(fd, "items"))) all.Add(Codec.FindingFrom(it));
             all.Sort(delegate (Finding x, Finding y) { int c = y.SortScore.CompareTo(x.SortScore); return c != 0 ? c : string.CompareOrdinal(y.Cve, x.Cve); });
             Dictionary<string, string> relStamp = new Dictionary<string, string>(); foreach (object u in Json.Arr(Json.Get(asOf, "msrc", "releases"))) { string rel = Json.GetS(u, "release"), st = Json.GetS(u, "cached"); if (rel != null && st != null) relStamp[rel] = st; }
             string nvdStamp = Json.GetS(asOf, "nvd", "newestCache") ?? enrichedUtc;
-            List<object> rows = new List<object>(), unconfirmed = new List<object>(); int rank = 0, crit = 0, high = 0, med = 0, low = 0, kev = 0, open = 0, patched = 0;
+            List<object> rows = new List<object>(), unconfirmed = new List<object>(); int rank = 0, crit = 0, high = 0, med = 0, low = 0, unrated = 0, kev = 0, open = 0, patched = 0;
             Dictionary<string, Dictionary<string, object>> byKb = new Dictionary<string, Dictionary<string, object>>(), byProd = new Dictionary<string, Dictionary<string, object>>(); List<string> kbOrder = new List<string>(), prodOrder = new List<string>();
             foreach (Finding f in all)
             {
@@ -148,7 +151,7 @@ namespace PSTools
                 row["rank"] = ++rank; rows.Add(row);
                 if (!f.Open) { patched++; continue; }
                 open++; if (f.Kev || f.Exploited) kev++;
-                switch (f.SeverityNorm) { case "Critical": crit++; break; case "High": high++; break; case "Medium": med++; break; case "Low": low++; break; }
+                switch (f.SeverityNorm) { case "Critical": crit++; break; case "High": high++; break; case "Medium": med++; break; case "Low": low++; break; default: unrated++; break; }   // PT-48: an unrated open finding is counted, not dropped from the headline
                 if (f.Source == "NVD") Group(byProd, prodOrder, f.Product, "product", f, f.Installed, f.Fix);
                 else { Match m = KbRx.Match(f.Fix ?? ""); string kb = m.Success ? "KB" + m.Groups[1].Value : (f.Fix.Length > 0 ? f.Fix : "(no fix named)"); Group(byKb, kbOrder, kb, "kb", f, "", f.Fix); }
             }
@@ -157,17 +160,25 @@ namespace PSTools
             Dictionary<string, object> osd = new Dictionary<string, object>(); osd["productName"] = os.ProductName; osd["displayVersion"] = os.DisplayVersion; osd["fullBuild"] = os.FullBuild; osd["arch"] = os.Arch; subject["os"] = osd;
             subject["runId"] = b.RunId; subject["engagementId"] = Json.GetS(b.Manifest, "engagementId") ?? ""; subject["collectedUtc"] = collectedUtc; subject["enrichedUtc"] = enrichedUtc; subject["privilegeTier"] = Json.GetS(b.Manifest, "privilegeTier") ?? ""; subject["collector"] = Json.Obj(Json.Get(b.Manifest, "collector")) ?? new Dictionary<string, object>();
             r["subject"] = subject; r["asOf"] = asOf;
-            Dictionary<string, object> s = new Dictionary<string, object>(); s["open"] = open; s["patched"] = patched; s["total"] = rows.Count; s["critical"] = crit; s["high"] = high; s["medium"] = med; s["low"] = low; s["knownExploited"] = kev; s["unconfirmed"] = unconfirmed.Count;
-            s["msrcWindow"] = JsonWrite.Int(Json.Get(fd, "msrcWindow"), 0); s["releases"] = new List<string>(JsonWrite.Strings(Json.Get(fd, "releases")));
-            s["headline"] = open == 0 ? "No open vulnerabilities were found against the feeds as of the stated dates: every Microsoft CVE in the checked releases is fixed on this build and no third-party product at its installed version has a known CVE." : open + " open finding" + (open == 1 ? "" : "s") + " (" + crit + " critical, " + high + " high, " + med + " medium, " + low + " low), " + kev + " of them known to be exploited; " + patched + " already patched; " + unconfirmed.Count + " third-party match" + (unconfirmed.Count == 1 ? "" : "es") + " could not be confirmed against the installed version.";
+            Dictionary<string, object> s = new Dictionary<string, object>(); s["open"] = open; s["patched"] = patched; s["total"] = rows.Count; s["critical"] = crit; s["high"] = high; s["medium"] = med; s["low"] = low; s["unrated"] = unrated; s["knownExploited"] = kev; s["unconfirmed"] = unconfirmed.Count;
+            int window = JsonWrite.Int(Json.Get(fd, "msrcWindow"), 0); List<string> releases = new List<string>(JsonWrite.Strings(Json.Get(fd, "releases"))); s["msrcWindow"] = window; s["releases"] = releases;
+            // PT-45: the verdict fails closed. Nothing reads as clean unless every requested MSRC release was read, every feed answered and enrichment logged no problem;
+            // the verdict goes into the headline of every format and into summary.status / summary.coverage, never only into method.coverage.
+            Coverage cv = Coverage.Of(asOf, haveAsOf, window, releases.Count, new List<string>(JsonWrite.Strings(Json.Get(fd, "errors"))));
+            s["status"] = cv.Status; s["assessable"] = cv.Status == "assessed"; s["coverage"] = cv.ToJson();
+            string counts = open + " open finding" + (open == 1 ? "" : "s") + " (" + crit + " critical, " + high + " high, " + med + " medium, " + low + " low, " + unrated + " unrated), " + kev + " of them known to be exploited; " + patched + " already patched; " + unconfirmed.Count + " third-party match" + (unconfirmed.Count == 1 ? "" : "es") + " could not be confirmed against the installed version.";
+            if (cv.Status == "not-assessable") s["headline"] = "NOT ASSESSABLE - the vulnerability feeds could not be checked (" + cv.Summary() + "). This is not a clean result: nothing in this report says the host is patched. Repair the feed cache or go online, then run `enrich` again.";
+            else if (cv.Status == "incomplete-coverage") s["headline"] = "INCOMPLETE COVERAGE - " + cv.Summary() + ". The findings below are real but partial: a release or feed that was not read may hide more, so this is not a clean result. So far: " + counts;
+            else s["headline"] = open == 0 ? "No open vulnerabilities were found against the feeds as of the stated dates: every Microsoft CVE in the checked releases is fixed on this build and no third-party product at its installed version has a known CVE." : counts;
             r["summary"] = s; r["rows"] = rows; r["unconfirmed"] = unconfirmed;
             Dictionary<string, object> rem = new Dictionary<string, object>(); List<object> bu = new List<object>(); foreach (string k in kbOrder) bu.Add(byKb[k]); List<object> bp = new List<object>(); foreach (string k in prodOrder) bp.Add(byProd[k]); rem["byUpdate"] = bu; rem["byProduct"] = bp; r["remediation"] = rem;
             Dictionary<string, object> method = new Dictionary<string, object>(); method["text"] = MethodText;
             List<string> lim = new List<string>(); lim.Add("Version/build-based, not exploit-validated: a finding means the fix is missing, not that the weakness was exploited or exploitable in this environment. The 'validated' column is filled in by a separate exploit-validation pass (confirmed / not exploitable / untested).");
             lim.Add("Only products the inventory could map to an NVD vendor:product with a comparable version were checked; software with no version or an unmapped name was not."); lim.Add("Feeds are judged as of the dates in the as-of block; a CVE published or added to KEV after those dates is not here."); lim.Add("Unconfirmed matches are NVD records without version bounds for a product that is installed; they need a manual check and are listed separately, not counted as open.");
             string missing = Json.GetS(inv, "missingStatus") ?? ""; if (missing.StartsWith("not searched")) lim.Add("Windows Update was not asked which updates it offers (offline collection); 'update available' therefore comes from MSRC build comparison only."); if (JsonWrite.Bool(Json.Get(asOf, "msrc", "newestUpdateInFuture"))) lim.Add("The bundle's newest-update date lies in the future and was not trusted; the widest MSRC window was checked instead.");
+            lim.Add("Rows are ordered by a composite score - open before closed, known-exploited first, then severity, CVSS and EPSS - so among closed rows a higher severity can precede a higher CVSS; the per-row 'score' is in the JSON.");
             method["limitations"] = lim;
-            Dictionary<string, object> cov = new Dictionary<string, object>(); cov["msrcWindow"] = s["msrcWindow"]; cov["releases"] = s["releases"]; cov["minimumMonths"] = Json.Get(asOf, "msrc", "minimum"); cov["newestUpdate"] = Json.Get(asOf, "msrc", "newestUpdate"); cov["offline"] = Json.Get(asOf, "offline"); cov["missingUpdateSearch"] = missing; cov["problems"] = new List<string>(JsonWrite.Strings(Json.Get(fd, "errors"))); cov["privilegeTier"] = subject["privilegeTier"]; cov["softwareInventoried"] = Json.Arr(Json.Get(inv, "software")).Count; cov["nvdProductsLookedUp"] = Json.Get(asOf, "nvd", "products");
+            Dictionary<string, object> cov = new Dictionary<string, object>(); cov["status"] = cv.Status; cov["releasesChecked"] = releases.Count; cov["feedsUnavailable"] = new List<string>(cv.FeedsDown); cov["msrcWindow"] = s["msrcWindow"]; cov["releases"] = s["releases"]; cov["minimumMonths"] = Json.Get(asOf, "msrc", "minimum"); cov["newestUpdate"] = Json.Get(asOf, "msrc", "newestUpdate"); cov["offline"] = Json.Get(asOf, "offline"); cov["missingUpdateSearch"] = missing; cov["problems"] = new List<string>(JsonWrite.Strings(Json.Get(fd, "errors"))); cov["privilegeTier"] = subject["privilegeTier"]; cov["softwareInventoried"] = Json.Arr(Json.Get(inv, "software")).Count; cov["nvdProductsLookedUp"] = Json.Get(asOf, "nvd", "products");
             method["coverage"] = cov; r["method"] = method;
             Dictionary<string, object> br = new Dictionary<string, object>(); br["name"] = brand.Name; br["line"] = brand.Line; br["footer"] = brand.Footer; r["brand"] = br;
             return r;
@@ -200,6 +211,40 @@ namespace PSTools
         }
     }
 
+    // ───────────────────────────── coverage verdict (PT-45) ─────────────────────────────
+    /// <summary>How much of the assessment actually happened. assessed: every requested MSRC monthly release was read, every feed answered and enrichment logged no problem. incomplete-coverage: something was checked, but not everything. not-assessable: nothing usable was checked (no release read, or no as-of block). The report layer fails closed on this: the verdict leads the headline in every format.</summary>
+    public class Coverage
+    {
+        public string Status = "assessed"; public int Checked, Expected; public List<string> FeedsDown = new List<string>(), Problems = new List<string>();
+        static readonly string[] Feeds = { "MSRC", "NVD", "KEV", "EPSS" };
+        public static Coverage Of(Dictionary<string, object> asOf, bool haveAsOf, int expected, int checkedCount, List<string> problems)
+        {
+            Coverage c = new Coverage(); c.Expected = expected; c.Checked = checkedCount; c.Problems = problems ?? new List<string>();
+            foreach (string feed in Feeds)
+            {
+                bool present = haveAsOf && Json.Get(asOf, feed.ToLowerInvariant()) != null, failed = false;
+                foreach (string p in c.Problems) if (p.StartsWith(feed, StringComparison.OrdinalIgnoreCase)) failed = true;   // enrich logs "MSRC 2026-Oct: …", "NVD cpe:…", "KEV: …", "EPSS: …"
+                if (feed == "MSRC") failed = checkedCount == 0;   // a partly read MSRC window is already stated as "n of m releases checked"; "unavailable" means none was read
+                if (!present || failed) c.FeedsDown.Add(feed);
+            }
+            if (!haveAsOf || checkedCount == 0 || Json.Get(asOf, "msrc") == null) c.Status = "not-assessable";
+            else if (c.Problems.Count > 0 || checkedCount < expected || c.FeedsDown.Count > 0) c.Status = "incomplete-coverage";
+            return c;
+        }
+        /// <summary>The facts for the headline: releases read of requested, feeds that did not answer, problems logged.</summary>
+        public string Summary()
+        {
+            string s = Checked + " of " + Expected + " MSRC monthly release" + (Expected == 1 ? "" : "s") + " checked";
+            if (FeedsDown.Count > 0) s += "; feed" + (FeedsDown.Count == 1 ? "" : "s") + " unavailable: " + string.Join(", ", FeedsDown.ToArray());
+            if (Problems.Count > 0) s += "; " + Problems.Count + " problem" + (Problems.Count == 1 ? "" : "s") + " during enrichment";
+            return s;
+        }
+        public Dictionary<string, object> ToJson()
+        {
+            Dictionary<string, object> d = new Dictionary<string, object>(); d["status"] = Status; d["releasesChecked"] = Checked; d["releasesExpected"] = Expected; d["feedsUnavailable"] = new List<string>(FeedsDown); d["problems"] = Problems.Count; d["text"] = Summary(); return d;
+        }
+    }
+
     // ───────────────────────────── renderers ─────────────────────────────
     public static class ReportRender
     {
@@ -207,7 +252,43 @@ namespace PSTools
         static string E(string s) { return Html.Esc(s); }
         static string Num(object o, string k, string fmt) { double? n = Json.N(Json.Get(o, k)); return n.HasValue ? n.Value.ToString(fmt, CultureInfo.InvariantCulture) : ""; }
         static bool B(object o, string k) { return JsonWrite.Bool(Json.Get(o, k)); }
-        static string Md(string s) { if (s == null) return ""; return s.Replace("\\", "\\\\").Replace("|", "\\|").Replace("\r", " ").Replace("\n", " ").Replace("<", "&lt;").Replace(">", "&gt;"); }
+        /// <summary>PT-46, prose the report composes itself (headline, method, brand): every Markdown-active ASCII punctuation is backslash-escaped, angle brackets become entities, and anything shaped like a URL or an e-mail address is emitted as inline code so no renderer autolinks it.</summary>
+        static readonly Regex LinkRx = new Regex(@"(?i)\b(?:https?://|www\.)\S+|[^\s@`]+@[^\s@`]+\.[^\s@`]+");
+        static string Md(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return ""; StringBuilder sb = new StringBuilder(s.Length + 16); int at = 0;
+            foreach (Match m in LinkRx.Matches(s)) { MdText(sb, s.Substring(at, m.Index - at)); sb.Append(Mc(m.Value)); at = m.Index + m.Length; }
+            MdText(sb, s.Substring(at)); return sb.ToString();
+        }
+        static void MdText(StringBuilder sb, string s)
+        {
+            foreach (char c in s) { if (c == '<') sb.Append("&lt;"); else if (c == '>') sb.Append("&gt;"); else if (c == '\r' || c == '\n') sb.Append(' '); else { if ("\\`*_{}[]()#+-.!|~".IndexOf(c) >= 0) sb.Append('\\'); sb.Append(c); } }
+        }
+        /// <summary>PT-46, data from the audited host (names, titles, evidence, versions, ids, dates): one inline code span, fenced with one more backtick than the longest run inside, so links, images, emphasis, HTML and autolinks are all inert. Pipes stay escaped for the table; angle brackets become entities for a renderer that is careless with code spans.</summary>
+        static string Mc(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return ""; s = s.Replace("\r", " ").Replace("\n", " ").Replace("|", "\\|").Replace("<", "&lt;").Replace(">", "&gt;");
+            int run = 0, longest = 0; foreach (char c in s) { run = c == '`' ? run + 1 : 0; if (run > longest) longest = run; }
+            string fence = new string('`', longest + 1); bool pad = s[0] == '`' || s[s.Length - 1] == '`'; return fence + (pad ? " " : "") + s + (pad ? " " : "") + fence;
+        }
+        /// <summary>PT-45: the coverage verdict with its problems at the top of the Markdown when the report is not a clean assessment.</summary>
+        static string MdBanner(Dictionary<string, object> r)
+        {
+            object sum = Json.Get(r, "summary"); string st = S(sum, "status"); if (st == "assessed") return "";
+            StringBuilder sb = new StringBuilder(); sb.Append("> **").Append(st == "not-assessable" ? "NOT ASSESSABLE" : "INCOMPLETE COVERAGE").Append("** — ").Append(Md(S(sum, "headline"))).Append("\n");
+            List<string> probs = JsonWrite.Strings(Json.Get(r, "method", "coverage", "problems")); int n = 0;
+            foreach (string p in probs) { if (++n > 12) { sb.Append(">\n> - … and ").Append(probs.Count - 12).Append(" more (method.coverage.problems in the JSON)\n"); break; } sb.Append(">\n> - ").Append(Md(p)).Append("\n"); }
+            return sb.Append("\n").ToString();
+        }
+        /// <summary>PT-45: the same verdict and problems, above the cards in the HTML.</summary>
+        static string HtmlBanner(Dictionary<string, object> r)
+        {
+            object sum = Json.Get(r, "summary"); string st = S(sum, "status"); if (st == "assessed") return "";
+            StringBuilder sb = new StringBuilder(); sb.Append("<div class=\"alert\"><b>").Append(st == "not-assessable" ? "NOT ASSESSABLE" : "INCOMPLETE COVERAGE").Append("</b> — ").Append(E(S(sum, "headline")));
+            List<string> probs = JsonWrite.Strings(Json.Get(r, "method", "coverage", "problems")); int n = 0;
+            if (probs.Count > 0) { sb.Append("<ul>"); foreach (string p in probs) { if (++n > 12) { sb.Append("<li>… and ").Append(probs.Count - 12).Append(" more (method.coverage.problems in the JSON)</li>"); break; } sb.Append("<li>").Append(E(p)).Append("</li>"); } sb.Append("</ul>"); }
+            return sb.Append("</div>\n").ToString();
+        }
         public static readonly string[] Columns = { "rank", "id", "severity", "status", "cve", "title", "source", "product", "installed", "fix", "cvss", "epss", "kev", "ransomware", "kevDue", "exploited", "release", "validated", "asOf", "evidence", "url" };
         /// <summary>host_runId_kind, reduced to safe characters: a deterministic name, no timestamp.</summary>
         public static string FileStem(Dictionary<string, object> r)
@@ -235,7 +316,9 @@ namespace PSTools
         // ── CSV: every cell through Fmt.CsvQ, which quotes and neutralises formula cells (= + - @ TAB CR) ──
         public static string Csv(Dictionary<string, object> r)
         {
-            StringBuilder sb = new StringBuilder(); List<string> h = new List<string>(); foreach (string c in Columns) h.Add(Fmt.CsvQ(c)); sb.Append(string.Join(",", h.ToArray())).Append("\r\n");
+            // PT-45: the first line carries the verdict and the headline, so a CSV on its own can never pass for clean; the column header follows it
+            object sum = Json.Get(r, "summary"); StringBuilder sb = new StringBuilder(); sb.Append(Fmt.CsvQ("# " + S(sum, "status").ToUpperInvariant().Replace('-', ' ') + " · " + S(Json.Get(sum, "coverage"), "text") + " · " + S(sum, "headline"))).Append("\r\n");
+            List<string> h = new List<string>(); foreach (string c in Columns) h.Add(Fmt.CsvQ(c)); sb.Append(string.Join(",", h.ToArray())).Append("\r\n");
             foreach (string sec in new string[] { "rows", "unconfirmed" }) foreach (object row in Json.Arr(Json.Get(r, sec)))
             {
                 List<string> cells = new List<string>();
@@ -249,18 +332,18 @@ namespace PSTools
         public static string Markdown(Dictionary<string, object> r)
         {
             object sub = Json.Get(r, "subject"), sum = Json.Get(r, "summary"), os = Json.Get(sub, "os"); StringBuilder sb = new StringBuilder();
-            sb.Append("# ").Append(Md(S(r, "title"))).Append(" — ").Append(Md(S(sub, "host"))).Append("\n\n");
-            sb.Append("- **Host:** ").Append(Md(S(sub, "host"))).Append(S(sub, "domain").Length > 0 ? " (" + Md(S(sub, "domain")) + ")" : "").Append("\n- **OS:** ").Append(Md(S(os, "productName"))).Append(" ").Append(Md(S(os, "displayVersion"))).Append(" · build ").Append(Md(S(os, "fullBuild"))).Append(" · ").Append(Md(S(os, "arch"))).Append("\n- **Collected:** ").Append(Md(S(sub, "collectedUtc"))).Append(" · **Enriched:** ").Append(Md(S(sub, "enrichedUtc"))).Append(" · **Run:** ").Append(Md(S(sub, "runId"))).Append(S(sub, "engagementId").Length > 0 ? " · **Engagement:** " + Md(S(sub, "engagementId")) : "").Append("\n");
-            sb.Append("- **Result:** ").Append(Md(S(sum, "headline"))).Append("\n\n");
-            sb.Append("## Open findings, risk-ranked (KEV → EPSS → CVSS)\n\n| # | Severity | CVE | Title | Product | Installed | Fix | CVSS | EPSS | KEV | Status | Validated | As of |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
-            int shown = 0; foreach (object row in Json.Arr(Json.Get(r, "rows"))) { if (!B(row, "open")) continue; shown++; sb.Append("| ").Append(Num(row, "rank", "0")).Append(" | ").Append(Md(S(row, "severity"))).Append(" | ").Append(Md(S(row, "cve"))).Append(" | ").Append(Md(S(row, "title"))).Append(" | ").Append(Md(S(row, "product"))).Append(" | ").Append(Md(S(row, "installed"))).Append(" | ").Append(Md(S(row, "fix"))).Append(" | ").Append(Num(row, "cvss", "0.#")).Append(" | ").Append(Num(row, "epss", "0.###")).Append(" | ").Append(B(row, "kev") ? (B(row, "ransomware") ? "KEV · ransomware" : "KEV") : (B(row, "exploited") ? "exploited" : "")).Append(" | ").Append(Md(S(row, "status"))).Append(" | ").Append(Md(S(row, "validated"))).Append(" | ").Append(Md(S(row, "asOf"))).Append(" |\n"); }
+            sb.Append("# ").Append(Md(S(r, "title"))).Append(" — ").Append(Mc(S(sub, "host"))).Append("\n\n").Append(MdBanner(r));
+            sb.Append("- **Host:** ").Append(Mc(S(sub, "host"))).Append(S(sub, "domain").Length > 0 ? " (" + Mc(S(sub, "domain")) + ")" : "").Append("\n- **OS:** ").Append(Mc(S(os, "productName"))).Append(" ").Append(Mc(S(os, "displayVersion"))).Append(" · build ").Append(Mc(S(os, "fullBuild"))).Append(" · ").Append(Mc(S(os, "arch"))).Append("\n- **Collected:** ").Append(Mc(S(sub, "collectedUtc"))).Append(" · **Enriched:** ").Append(Mc(S(sub, "enrichedUtc"))).Append(" · **Run:** ").Append(Mc(S(sub, "runId"))).Append(S(sub, "engagementId").Length > 0 ? " · **Engagement:** " + Mc(S(sub, "engagementId")) : "").Append("\n");
+            sb.Append("- **Result:** ").Append(Md(S(sum, "headline"))).Append("\n- **Coverage:** ").Append(Md(S(Json.Get(sum, "coverage"), "text"))).Append(" · status `").Append(S(sum, "status")).Append("`\n\n");
+            sb.Append("## Open findings, risk-ranked (open → known exploited → severity → CVSS → EPSS)\n\n| # | Severity | CVE | Title | Product | Installed | Fix | CVSS | EPSS | KEV | Status | Validated | As of |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+            int shown = 0; foreach (object row in Json.Arr(Json.Get(r, "rows"))) { if (!B(row, "open")) continue; shown++; sb.Append("| ").Append(Num(row, "rank", "0")).Append(" | ").Append(Mc(S(row, "severity"))).Append(" | ").Append(Mc(S(row, "cve"))).Append(" | ").Append(Mc(S(row, "title"))).Append(" | ").Append(Mc(S(row, "product"))).Append(" | ").Append(Mc(S(row, "installed"))).Append(" | ").Append(Mc(S(row, "fix"))).Append(" | ").Append(Num(row, "cvss", "0.#")).Append(" | ").Append(Num(row, "epss", "0.###")).Append(" | ").Append(B(row, "kev") ? (B(row, "ransomware") ? "KEV · ransomware" : "KEV") : (B(row, "exploited") ? "exploited" : "")).Append(" | ").Append(Mc(S(row, "status"))).Append(" | ").Append(Mc(S(row, "validated"))).Append(" | ").Append(Mc(S(row, "asOf"))).Append(" |\n"); }
             if (shown == 0) sb.Append("| – | – | – | no open findings | | | | | | | | | |\n");
             sb.Append("\n## Remediation by update\n\n| Update | Open CVEs | Worst | Known exploited | Products |\n|---|---|---|---|---|\n");
-            foreach (object u in Json.Arr(Json.Get(r, "remediation", "byUpdate"))) sb.Append("| ").Append(Md(S(u, "kb"))).Append(" | ").Append(Num(u, "openCount", "0")).Append(" | ").Append(Md(S(u, "worstSeverity"))).Append(" | ").Append(B(u, "knownExploited") ? "yes" : "").Append(" | ").Append(Md(string.Join(", ", JsonWrite.Strings(Json.Get(u, "products")).ToArray()))).Append(" |\n");
+            foreach (object u in Json.Arr(Json.Get(r, "remediation", "byUpdate"))) sb.Append("| ").Append(Mc(S(u, "kb"))).Append(" | ").Append(Num(u, "openCount", "0")).Append(" | ").Append(Mc(S(u, "worstSeverity"))).Append(" | ").Append(B(u, "knownExploited") ? "yes" : "").Append(" | ").Append(Mc(string.Join(", ", JsonWrite.Strings(Json.Get(u, "products")).ToArray()))).Append(" |\n");
             sb.Append("\n## Remediation by product\n\n| Product | Installed | Fix | Open CVEs | Worst | Known exploited |\n|---|---|---|---|---|---|\n");
-            foreach (object p in Json.Arr(Json.Get(r, "remediation", "byProduct"))) sb.Append("| ").Append(Md(S(p, "product"))).Append(" | ").Append(Md(S(p, "installed"))).Append(" | ").Append(Md(S(p, "fix"))).Append(" | ").Append(Num(p, "openCount", "0")).Append(" | ").Append(Md(S(p, "worstSeverity"))).Append(" | ").Append(B(p, "knownExploited") ? "yes" : "").Append(" |\n");
-            sb.Append("\n## Unconfirmed third-party matches\n\n"); List<object> un = Json.Arr(Json.Get(r, "unconfirmed")); if (un.Count == 0) sb.Append("None.\n"); else { sb.Append("| CVE | Product | Installed | Evidence |\n|---|---|---|---|\n"); foreach (object row in un) sb.Append("| ").Append(Md(S(row, "cve"))).Append(" | ").Append(Md(S(row, "product"))).Append(" | ").Append(Md(S(row, "installed"))).Append(" | ").Append(Md(S(row, "evidence"))).Append(" |\n"); }
-            sb.Append("\n## Patched / closed\n\n").Append(Num(sum, "patched", "0")).Append(" finding(s) are fixed on this build (listed in the JSON and CSV).\n\n## Feeds as of\n\n").Append("```\n").Append(JsonWrite.Text(Json.Get(r, "asOf"), true)).Append("```\n\n## Method and limitations\n\n").Append(Md(S(Json.Get(r, "method"), "text"))).Append("\n\n");
+            foreach (object p in Json.Arr(Json.Get(r, "remediation", "byProduct"))) sb.Append("| ").Append(Mc(S(p, "product"))).Append(" | ").Append(Mc(S(p, "installed"))).Append(" | ").Append(Mc(S(p, "fix"))).Append(" | ").Append(Num(p, "openCount", "0")).Append(" | ").Append(Mc(S(p, "worstSeverity"))).Append(" | ").Append(B(p, "knownExploited") ? "yes" : "").Append(" |\n");
+            sb.Append("\n## Unconfirmed third-party matches\n\n"); List<object> un = Json.Arr(Json.Get(r, "unconfirmed")); if (un.Count == 0) sb.Append("None.\n"); else { sb.Append("| CVE | Product | Installed | Evidence |\n|---|---|---|---|\n"); foreach (object row in un) sb.Append("| ").Append(Mc(S(row, "cve"))).Append(" | ").Append(Mc(S(row, "product"))).Append(" | ").Append(Mc(S(row, "installed"))).Append(" | ").Append(Mc(S(row, "evidence"))).Append(" |\n"); }
+            sb.Append("\n## Patched / closed\n\n").Append(Num(sum, "patched", "0")).Append(" finding(s) are fixed on this build (listed in the JSON and CSV).\n\n## Feeds as of\n\n").Append("````\n").Append(JsonWrite.Text(Json.Get(r, "asOf"), true)).Append("````\n\n## Method and limitations\n\n").Append(Md(S(Json.Get(r, "method"), "text"))).Append("\n\n");
             foreach (string l in JsonWrite.Strings(Json.Get(r, "method", "limitations"))) sb.Append("- ").Append(Md(l)).Append("\n");
             sb.Append("\n_").Append(Md(S(Json.Get(r, "brand"), "name"))).Append(" · ").Append(Md(S(Json.Get(r, "brand"), "footer"))).Append(" · ").Append(Ptreport.Schema).Append("_\n");
             return sb.ToString();
@@ -270,15 +353,16 @@ namespace PSTools
         public static string HtmlPage(Dictionary<string, object> r, Brand brand)
         {
             object sub = Json.Get(r, "subject"), sum = Json.Get(r, "summary"), os = Json.Get(sub, "os"); StringBuilder sb = new StringBuilder();
-            sb.Append("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"referrer\" content=\"no-referrer\">\n<title>").Append(E(S(r, "title") + " - " + S(sub, "host"))).Append("</title>\n<style>\n");
+            sb.Append("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"referrer\" content=\"no-referrer\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">\n<title>").Append(E(S(r, "title") + " - " + S(sub, "host"))).Append("</title>\n<style>\n");
             sb.Append(":root{--accent:").Append(brand.Accent).Append(";--ink:").Append(brand.Ink).Append(";--paper:").Append(brand.Paper).Append(";--panel:").Append(brand.Panel).Append(";--muted:").Append(brand.Muted).Append(";--rule:").Append(brand.Rule).Append("}\n");
-            sb.Append("*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px 32px 48px}header{display:flex;align-items:center;gap:24px;border-bottom:3px solid var(--accent);padding-bottom:18px;margin-bottom:22px}header .logo svg{height:44px;width:auto;display:block}.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}h1{margin:2px 0 6px;font-size:26px;letter-spacing:-.01em}h2{font-size:17px;margin:30px 0 10px;padding-top:14px;border-top:1px solid var(--rule)}.meta{color:var(--muted);font-size:13px}.meta b{color:var(--ink);font-weight:600}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:18px 0}.card{background:var(--panel);border-radius:8px;padding:12px 14px}.card .n{font-size:26px;font-weight:700;line-height:1.1}.card .l{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.card.bad .n{color:").Append(brand.Severity["Critical"]).Append("}.headline{font-size:15px;background:var(--panel);border-left:4px solid var(--accent);padding:12px 16px;border-radius:0 8px 8px 0}table{width:100%;border-collapse:collapse;font-size:12.5px}th,td{text-align:left;vertical-align:top;padding:7px 8px;border-bottom:1px solid var(--rule)}th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--panel);position:sticky;top:0}td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.chip{display:inline-block;padding:1px 8px;border-radius:10px;color:#fff;font-size:11px;font-weight:700;letter-spacing:.04em;white-space:nowrap}.kev{display:inline-block;padding:1px 7px;border-radius:4px;background:").Append(brand.Severity["Critical"]).Append(";color:#fff;font-size:11px;font-weight:700}.mono{font-family:Consolas,'Courier New',monospace;font-size:12px}.ev{color:var(--muted);font-size:11.5px}details summary{cursor:pointer;color:var(--accent);font-weight:600}pre{background:var(--panel);padding:12px;border-radius:8px;overflow:auto;font-size:12px}footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--rule);color:var(--muted);font-size:12px}.lim li{margin:4px 0}\n");
+            sb.Append("*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px 32px 48px}header{display:flex;align-items:center;gap:24px;border-bottom:3px solid var(--accent);padding-bottom:18px;margin-bottom:22px}header .logo svg{height:44px;width:auto;display:block}.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}h1{margin:2px 0 6px;font-size:26px;letter-spacing:-.01em}h2{font-size:17px;margin:30px 0 10px;padding-top:14px;border-top:1px solid var(--rule)}.meta{color:var(--muted);font-size:13px}.meta b{color:var(--ink);font-weight:600}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:18px 0}.card{background:var(--panel);border-radius:8px;padding:12px 14px}.card .n{font-size:26px;font-weight:700;line-height:1.1}.card .l{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.card.bad .n{color:").Append(brand.Severity["Critical"]).Append("}.headline{font-size:15px;background:var(--panel);border-left:4px solid var(--accent);padding:12px 16px;border-radius:0 8px 8px 0}table{width:100%;border-collapse:collapse;font-size:12.5px}th,td{text-align:left;vertical-align:top;padding:7px 8px;border-bottom:1px solid var(--rule)}th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--panel);position:sticky;top:0}td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.chip{display:inline-block;padding:1px 8px;border-radius:10px;color:#fff;font-size:11px;font-weight:700;letter-spacing:.04em;white-space:nowrap}.kev{display:inline-block;padding:1px 7px;border-radius:4px;background:").Append(brand.Severity["Critical"]).Append(";color:#fff;font-size:11px;font-weight:700}.mono{font-family:Consolas,'Courier New',monospace;font-size:12px}.ev{color:var(--muted);font-size:11.5px}details summary{cursor:pointer;color:var(--accent);font-weight:600}pre{background:var(--panel);padding:12px;border-radius:8px;overflow:auto;font-size:12px}footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--rule);color:var(--muted);font-size:12px}.lim li{margin:4px 0}.alert{font-size:15px;border-left:4px solid ").Append(brand.Severity["Critical"]).Append(";background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}.alert ul{margin:8px 0 0;padding-left:20px}.alert li{font-size:12.5px;color:var(--muted)}.coverage{color:var(--muted);font-size:13px;margin:6px 0 0}.coverage.bad{color:").Append(brand.Severity["Critical"]).Append(";font-weight:600}\n");
             foreach (KeyValuePair<string, string> sv in brand.Severity) sb.Append(".sev-").Append(sv.Key).Append("{background:").Append(sv.Value).Append("}\n");
             sb.Append("@media print{body{font-size:11px}main{max-width:none;padding:0}header{break-after:avoid}h2{break-after:avoid}tr{break-inside:avoid}th{position:static}details{display:block}details>*{display:block}.card{border:1px solid var(--rule)}a{text-decoration:none;color:inherit}@page{margin:16mm 14mm}}\n</style>\n</head>\n<body>\n<main>\n");
             sb.Append("<header><div class=\"logo\">").Append(brand.SafeLogo(brand.Name)).Append("</div><div><div class=\"eyebrow\">").Append(E(brand.Line)).Append("</div><h1>").Append(E(S(r, "title"))).Append("</h1><div class=\"meta\"><b>").Append(E(S(sub, "host"))).Append("</b>").Append(S(sub, "domain").Length > 0 ? " · " + E(S(sub, "domain")) : "").Append(" · ").Append(E(S(os, "productName") + " " + S(os, "displayVersion"))).Append(" · build <span class=\"mono\">").Append(E(S(os, "fullBuild"))).Append("</span> · ").Append(E(S(os, "arch"))).Append("<br>collected <b>").Append(E(S(sub, "collectedUtc"))).Append("</b> · enriched <b>").Append(E(S(sub, "enrichedUtc"))).Append("</b> · run <span class=\"mono\">").Append(E(S(sub, "runId"))).Append("</span>").Append(S(sub, "engagementId").Length > 0 ? " · engagement <span class=\"mono\">" + E(S(sub, "engagementId")) + "</span>" : "").Append(" · privilege tier ").Append(E(S(sub, "privilegeTier"))).Append("</div></div></header>\n");
-            sb.Append("<section class=\"cards\">").Append(Card("open", Num(sum, "open", "0"), Json.N(Json.Get(sum, "open")) > 0)).Append(Card("critical", Num(sum, "critical", "0"), Json.N(Json.Get(sum, "critical")) > 0)).Append(Card("high", Num(sum, "high", "0"), Json.N(Json.Get(sum, "high")) > 0)).Append(Card("medium", Num(sum, "medium", "0"), false)).Append(Card("low", Num(sum, "low", "0"), false)).Append(Card("known exploited", Num(sum, "knownExploited", "0"), Json.N(Json.Get(sum, "knownExploited")) > 0)).Append(Card("patched", Num(sum, "patched", "0"), false)).Append(Card("unconfirmed", Num(sum, "unconfirmed", "0"), false)).Append(Card("MSRC releases", Num(sum, "msrcWindow", "0"), false)).Append("</section>\n");
-            sb.Append("<h2>Executive summary</h2><p class=\"headline\">").Append(E(S(sum, "headline"))).Append("</p>\n");
-            sb.Append("<h2>Open findings, risk-ranked (known exploited → EPSS → CVSS)</h2>\n<table><thead><tr><th>#</th><th>Severity</th><th>CVE</th><th>Title</th><th>Product</th><th>Installed</th><th>Fix</th><th>CVSS</th><th>EPSS</th><th>Exploited</th><th>Status</th><th>Validated</th><th>As of</th></tr></thead><tbody>\n");
+            object cov = Json.Get(sum, "coverage"); bool assessed = S(sum, "status") == "assessed"; sb.Append(HtmlBanner(r));
+            sb.Append("<section class=\"cards\">").Append(Card("open", Num(sum, "open", "0"), Json.N(Json.Get(sum, "open")) > 0)).Append(Card("critical", Num(sum, "critical", "0"), Json.N(Json.Get(sum, "critical")) > 0)).Append(Card("high", Num(sum, "high", "0"), Json.N(Json.Get(sum, "high")) > 0)).Append(Card("medium", Num(sum, "medium", "0"), false)).Append(Card("low", Num(sum, "low", "0"), false)).Append(Card("known exploited", Num(sum, "knownExploited", "0"), Json.N(Json.Get(sum, "knownExploited")) > 0)).Append(Card("patched", Num(sum, "patched", "0"), false)).Append(Card("unconfirmed", Num(sum, "unconfirmed", "0"), false)).Append(Card("MSRC releases checked", Num(cov, "releasesChecked", "0") + " of " + Num(cov, "releasesExpected", "0"), !assessed)).Append("</section>\n");
+            sb.Append("<h2>Executive summary</h2><p class=\"headline\">").Append(E(S(sum, "headline"))).Append("</p><p class=\"coverage").Append(assessed ? "" : " bad").Append("\">Coverage: ").Append(E(S(cov, "text"))).Append(" · status ").Append(E(S(sum, "status"))).Append("</p>\n");
+            sb.Append("<h2>Open findings, risk-ranked (open → known exploited → severity → CVSS → EPSS)</h2>\n<table><thead><tr><th>#</th><th>Severity</th><th>CVE</th><th>Title</th><th>Product</th><th>Installed</th><th>Fix</th><th>CVSS</th><th>EPSS</th><th>Exploited</th><th>Status</th><th>Validated</th><th>As of</th></tr></thead><tbody>\n");
             int shown = 0; foreach (object row in Json.Arr(Json.Get(r, "rows"))) { if (!B(row, "open")) continue; shown++; sb.Append(RowHtml(row, true)); }
             if (shown == 0) sb.Append("<tr><td colspan=\"13\">No open findings.</td></tr>\n"); sb.Append("</tbody></table>\n");
             sb.Append("<h2>Remediation by update</h2>\n<table><thead><tr><th>Update</th><th>Open CVEs</th><th>Worst</th><th>Known exploited</th><th>Products</th></tr></thead><tbody>\n");
@@ -312,9 +396,17 @@ namespace PSTools
             d.Line(20, true, brand.Ink, S(r, "title"), 0); d.Line(10.5f, false, brand.Muted, S(sub, "host") + (S(sub, "domain").Length > 0 ? " (" + S(sub, "domain") + ")" : "") + " · " + S(os, "productName") + " " + S(os, "displayVersion") + " · build " + S(os, "fullBuild") + " · " + S(os, "arch"), 0);
             d.Line(9.5f, false, brand.Muted, "collected " + S(sub, "collectedUtc") + " · enriched " + S(sub, "enrichedUtc") + " · run " + S(sub, "runId") + (S(sub, "engagementId").Length > 0 ? " · engagement " + S(sub, "engagementId") : "") + " · privilege tier " + S(sub, "privilegeTier"), 0); d.Gap(8);
             string[] labels = { "open", "critical", "high", "medium", "low", "known exploited", "patched", "unconfirmed" }; string[] keys = { "open", "critical", "high", "medium", "low", "knownExploited", "patched", "unconfirmed" }; string[] fills = { brand.Severity["Critical"], brand.Severity["Critical"], brand.Severity["High"], brand.Severity["Medium"], brand.Severity["Low"], brand.Severity["Critical"], brand.Severity["Low"], brand.Severity["Unrated"] };
+            // PT-45: the verdict leads the PDF too, with the problems, before any count that could be read as clean
+            string st = S(sum, "status"); object cov = Json.Get(sum, "coverage");
+            if (st != "assessed")
+            {
+                d.Para(11.5f, brand.Severity["Critical"], (st == "not-assessable" ? "NOT ASSESSABLE" : "INCOMPLETE COVERAGE") + " - " + S(cov, "text"), 0); d.Para(9.5f, brand.Ink, S(sum, "headline"), 0);
+                List<string> pr = JsonWrite.Strings(Json.Get(r, "method", "coverage", "problems")); int pn = 0; foreach (string p in pr) { if (++pn > 12) { d.Para(9, brand.Muted, "- … and " + (pr.Count - 12) + " more (method.coverage.problems in the JSON)", 10); break; } d.Para(9, brand.Muted, "- " + p, 10); }
+                d.Gap(8);
+            }
             d.Chips(labels, keys, sum, fills, brand.Muted); d.Gap(10);
-            d.Heading("Executive summary", brand.Accent); d.Para(10.5f, brand.Ink, S(sum, "headline"), 0); d.Gap(6);
-            d.Heading("Open findings, risk-ranked (known exploited → EPSS → CVSS)", brand.Accent);
+            d.Heading("Executive summary", brand.Accent); d.Para(10.5f, brand.Ink, S(sum, "headline"), 0); d.Para(9.5f, st == "assessed" ? brand.Muted : brand.Severity["Critical"], "Coverage: " + S(cov, "text") + " · status " + st, 0); d.Gap(6);
+            d.Heading("Open findings, risk-ranked (open → known exploited → severity → CVSS → EPSS)", brand.Accent);
             List<string[]> rows = new List<string[]>(); List<string> sevs = new List<string>();
             foreach (object row in Json.Arr(Json.Get(r, "rows"))) { if (!B(row, "open")) continue; rows.Add(new string[] { Num(row, "rank", "0"), S(row, "severity"), S(row, "cve"), S(row, "title"), S(row, "product") + (S(row, "installed").Length > 0 ? " " + S(row, "installed") : ""), S(row, "fix"), Num(row, "cvss", "0.#"), Num(row, "epss", "0.###"), B(row, "kev") ? "KEV" + (B(row, "ransomware") ? "/ransomware" : "") : (B(row, "exploited") ? "exploited" : ""), S(row, "status") }); sevs.Add(S(row, "severity")); }
             if (rows.Count == 0) d.Para(10, brand.Muted, "No open findings.", 0);

@@ -517,7 +517,10 @@ namespace PSTools
             try { written = ReportRender.WriteAll(r, brand, dir, formats); } catch (Exception ex) { if (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException) throw new UsageException("--out: cannot write to " + dir + ": " + ex.Message); throw; }
             object sum = Json.Get(r, "summary"); int openN = JsonWrite.Int(Json.Get(sum, "open"), 0), crit = JsonWrite.Int(Json.Get(sum, "critical"), 0), high = JsonWrite.Int(Json.Get(sum, "high"), 0), kev = JsonWrite.Int(Json.Get(sum, "knownExploited"), 0);
             Out.Cards("host", b.Host, "open", T(openN.ToString(), GoodIfZero(openN)), "critical", T(crit.ToString(), GoodIfZero(crit)), "high", T(high.ToString(), GoodIfZero(high)), "known exploited", T(kev.ToString(), GoodIfZero(kev)), "patched", JsonWrite.Int(Json.Get(sum, "patched"), 0), "unconfirmed", JsonWrite.Int(Json.Get(sum, "unconfirmed"), 0));
-            Out.Line("  " + (Json.GetS(sum, "headline") ?? ""), Tone.Dim); foreach (string w in written) Out.Line("  " + w);
+            string status = Json.GetS(sum, "status") ?? "assessed"; bool assessed = status == "assessed";
+            Out.Line("  " + (Json.GetS(sum, "headline") ?? ""), assessed ? Tone.Dim : Tone.Bad); Out.Line("  coverage: " + (Json.GetS(sum, "coverage", "text") ?? "") + " · status " + status, assessed ? Tone.Dim : Tone.Bad); foreach (string w in written) Out.Line("  " + w);
+            // PT-45: the deliverables are written (they say so on their first line), but the run does not pass - automation must not take an unchecked host for clean
+            if (!assessed) { Out.Error("the report is " + status.ToUpperInvariant().Replace('-', ' ') + " - not a clean result (exit 1)"); return Cli.PROBLEMS; }
             Out.Ok(written.Count + " deliverable(s) · " + Ptreport.Schema + " · brand " + brand.Name + " · bundle " + b.RunId + " enriched " + (Json.GetS(b.Manifest, "enriched", "utc") ?? "?")); return Cli.OK;
         }
 

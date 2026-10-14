@@ -21,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -960,9 +960,9 @@ namespace PSTools
                 bool same = true; for (int i = 0; i < f1.Count; i++) if (!SameBytes(f1[i], f2[i])) same = false; Check(same, "report: a second render of the same bundle is byte-identical in every format (golden reproducibility)");
                 string json = File.ReadAllText(f1[0]), csv = File.ReadAllText(f1[1]), md = File.ReadAllText(f1[2]), html = File.ReadAllText(f1[3]); byte[] pdf = File.ReadAllBytes(f1[4]);
                 Check(JsonSchema.Validate(Ptreport.LoadSchema("ptreport-1.schema.json"), Json.Parse(json)).Count == 0 && json.Contains("<script>alert(1)</script>") && json.Contains("WS-<b>FIN</b>-01"), "report json: validates, and keeps the hostile strings verbatim (the source of truth is not where escaping belongs)");
-                Check(csv.Contains("'=HYPERLINK") && !Regex.IsMatch(csv, "(^|,)\"?=HYPERLINK", RegexOptions.Multiline) && csv.StartsWith("rank,id,severity") && csv.Split('\n').Length >= 19, "report csv: the formula cell is neutralised with a leading apostrophe and quoted; header + 18 rows");
+                Check(csv.Contains("'=HYPERLINK") && !Regex.IsMatch(csv, "(^|,)\"?=HYPERLINK", RegexOptions.Multiline) && Regex.IsMatch(csv, "^\"?# ASSESSED") && csv.Contains("\r\nrank,id,severity") && csv.Split('\n').Length >= 20, "report csv: the formula cell is neutralised with a leading apostrophe and quoted; verdict line, header + 18 rows");
                 Check(html.Contains("&lt;script&gt;alert(1)&lt;/script&gt;") && !html.Contains("<script>") && html.Contains("WS-&lt;b&gt;FIN&lt;/b&gt;-01") && !html.Contains("WS-<b>FIN") && html.Contains("&#39;q&#39;") && !Regex.IsMatch(html, "(href|src)\\s*=\\s*[\"']\\s*https?:", RegexOptions.IgnoreCase) && !html.Contains("<link") && html.Contains("<svg") && html.Contains("@media print") && html.Contains("stroke=\"#0FAA04\"") && html.Contains("CVE-2026-1003") && html.Contains("class=\"kev\""), "report html: every client-controlled string escaped, no external href/src/link, inline Offport SVG, print stylesheet, KEV row present");
-                Check(md.Contains("\\|") && md.Contains("&lt;script&gt;") && !md.Contains("<script>") && md.StartsWith("# Endpoint Vulnerability Report"), "report md: pipes and angle brackets escaped, title present");
+                Check(md.Contains("\\|") && md.Contains("&lt;script&gt;") && !md.Contains("<script>") && md.StartsWith("# Endpoint Vulnerability Report") && md.Contains("- **Coverage:** ") && md.Contains("status `assessed`"), "report md: pipes and angle brackets escaped, title present, coverage line present");
                 string pdfText = Encoding.GetEncoding(1252).GetString(pdf); int pages = Regex.Matches(pdfText, "/Type /Page ").Count;
                 Check(pdf.Length > 3000 && pdfText.StartsWith("%PDF-1.4") && pdfText.TrimEnd().EndsWith("%%EOF") && pages >= 1 && pdfText.Contains("/Helvetica-Bold") && pdfText.Contains("Page 1 of " + pages) && pdfText.Contains(" re f") && pdfText.Contains("<script>alert\\(1\\)</script>") && !pdfText.Contains("alert(1)"), "report pdf: PDF 1.4, " + pages + " page(s), Helvetica, filled chips, page numbers; hostile text stays inside its string operand (parentheses escaped, nothing can end the operand early)");
                 // the real tool, twice, offline: identical outputs, exit 0; a never-enriched bundle is refused
@@ -976,6 +976,90 @@ namespace PSTools
                     Check(cliSame && x3 == 1 && o3.Contains("findings") && x4 == 2 && o4.Contains("--formats"), "report CLI: two runs give identical files (exit " + x1 + "/" + x2 + "); a never-enriched bundle exits 1 naming the reason (" + x3 + "); an unknown format is a usage error (" + x4 + ")");
                 }
                 else Check(false, "report CLI: PowerTowerCli.exe not found next to Tests.exe");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        /// <summary>PT-45: the report fails closed. An empty feed cache is NOT ASSESSABLE, a partly read window is INCOMPLETE COVERAGE, only full coverage gets the normal headline - in every format, with summary.status in the JSON and exit 1 from the CLI.</summary>
+        static void ReportCoverage_()
+        {
+            DateTime now = new DateTime(2026, 10, 13); string dir = Path.Combine(Path.GetTempPath(), "pstools-cov-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir); Brand brand = new Brand(); string[] fmts = { "json", "csv", "md", "html", "pdf" };
+            try
+            {
+                // (c) full coverage keeps the normal headline and is 'assessed'
+                Bundle full = EnrichedFixture(Path.Combine(dir, "full"), now, null); Dictionary<string, object> rf = VulnReport.Build(full, brand); object sf = Json.Get(rf, "summary"); string hf = Json.GetS(sf, "headline") ?? "";
+                Check(Json.GetS(sf, "status") == "assessed" && JsonWrite.Bool(Json.Get(sf, "assessable")) && hf.StartsWith("17 open findings") && hf.Contains(" unrated), ") && Json.N(Json.Get(sf, "coverage", "releasesChecked")) == Json.N(Json.Get(sf, "coverage", "releasesExpected")) && Json.Arr(Json.Get(sf, "coverage", "feedsUnavailable")).Count == 0 && Ptreport.Validate(rf).Count == 0, "coverage: a fully covered fixture is 'assessed' (" + Json.GetS(sf, "coverage", "text") + ") and keeps the normal headline, now with the unrated count (PT-48)");
+                // (a) an empty feed cache, offline: nothing could be checked
+                FeedCache empty = new FeedCache(Path.Combine(dir, "empty")); empty.Offline = true; Bundle ba = FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc)); VulnEnrich ea = EnrichBundle.From(ba, empty); ea.Now = now; ea.Run(); EnrichBundle.Apply(ba, ea);
+                Dictionary<string, object> ra = VulnReport.Build(ba, brand); object sa = Json.Get(ra, "summary"); string ha = Json.GetS(sa, "headline") ?? "";
+                Check(Json.GetS(sa, "status") == "not-assessable" && !JsonWrite.Bool(Json.Get(sa, "assessable")) && ha.StartsWith("NOT ASSESSABLE") && ha.Contains("0 of ") && !ha.Contains("No open vulnerabilities") && !ha.Contains("is fixed on this build") && Json.Arr(Json.Get(sa, "coverage", "feedsUnavailable")).Count >= 3 && Json.N(Json.Get(sa, "coverage", "problems")) > 0 && Ptreport.Validate(ra).Count == 0, "coverage: an empty feed cache is NOT ASSESSABLE with the facts (" + Json.GetS(sa, "coverage", "text") + "), never 'no open vulnerabilities'");
+                Check(FormatsSay(ReportRender.WriteAll(ra, brand, Path.Combine(dir, "a"), fmts), "NOT ASSESSABLE", "not-assessable", null), "coverage: NOT ASSESSABLE leads every format - json status flag, csv first line, md, html, pdf - and none says 'no open vulnerabilities' or 'is fixed on this build'");
+                // (b) a stale host (patch level January 2025: a 22-month window) with only 4 monthly releases readable in the cache
+                string partDir = Path.Combine(dir, "part"); FeedCache part = SeedFeeds(partDir, now); int kept = 0; foreach (string f in Directory.GetFiles(partDir, "msrc-*.json", SearchOption.AllDirectories)) { if (Path.GetFileName(f) == "msrc-releases.json") continue; if (++kept > 4) File.Delete(f); }
+                Bundle bb = FixtureBundle(2500, new DateTime(2025, 1, 10, 0, 0, 0, DateTimeKind.Utc)); VulnEnrich eb = EnrichBundle.From(bb, part); eb.Now = now; eb.Run(); EnrichBundle.Apply(bb, eb);
+                Dictionary<string, object> rb = VulnReport.Build(bb, brand); object sb2 = Json.Get(rb, "summary"); string hb = Json.GetS(sb2, "headline") ?? "";
+                Check(Json.GetS(sb2, "status") == "incomplete-coverage" && hb.StartsWith("INCOMPLETE COVERAGE") && hb.Contains("4 of 22 MSRC monthly releases checked") && !hb.Contains("No open vulnerabilities") && !hb.Contains("is fixed on this build") && Json.N(Json.Get(sb2, "coverage", "releasesChecked")) == 4 && Json.N(Json.Get(sb2, "coverage", "releasesExpected")) == 22 && Json.N(Json.Get(sb2, "coverage", "problems")) >= 14 && Ptreport.Validate(rb).Count == 0, "coverage: 4 of 22 releases is INCOMPLETE COVERAGE with the counts (" + Json.GetS(sb2, "coverage", "text") + "), never clean");
+                List<string> wb = ReportRender.WriteAll(rb, brand, Path.Combine(dir, "b"), fmts);
+                Check(FormatsSay(wb, "INCOMPLETE COVERAGE", "incomplete-coverage", "4 of 22"), "coverage: INCOMPLETE COVERAGE and '4 of 22' lead every format");
+                string mdB = File.ReadAllText(wb[2]), htmlB = File.ReadAllText(wb[3]); int bannerAt = mdB.IndexOf("INCOMPLETE COVERAGE"), tableAt = mdB.IndexOf("## Open findings");
+                Check(bannerAt > 0 && bannerAt < tableAt && mdB.Substring(0, tableAt).Contains("offline") && htmlB.IndexOf("INCOMPLETE COVERAGE") > 0 && htmlB.IndexOf("INCOMPLETE COVERAGE") < htmlB.IndexOf("<h2>Open findings") && htmlB.Contains("<div class=\"alert\"><b>INCOMPLETE COVERAGE</b>") && htmlB.Contains("MSRC releases checked"), "coverage: the banner with the problems themselves comes before the findings in Markdown and HTML, and the HTML tile reads 'MSRC releases checked'");
+                Check(Json.GetS(Json.Get(rb, "method", "coverage"), "status") == "incomplete-coverage" && Json.N(Json.Get(rb, "method", "coverage", "releasesChecked")) == 4 && Json.Arr(Json.Get(rb, "method", "coverage", "problems")).Count >= 14, "coverage: method.coverage carries status and releasesChecked as well");
+                // a doctored findings section is refused, not read as clean
+                Bundle bad = FixtureBundle(2500, new DateTime(2025, 7, 10, 0, 0, 0, DateTimeKind.Utc)); Dictionary<string, object> fdx = new Dictionary<string, object>(); fdx["items"] = "nope"; fdx["asOf"] = new Dictionary<string, object>(); bad["findings"] = fdx; string e1 = ""; try { VulnReport.Build(bad, brand); } catch (BundleException ex) { e1 = ex.Message; }
+                bad["findings"] = "nope"; string e2 = ""; try { VulnReport.Build(bad, brand); } catch (BundleException ex) { e2 = ex.Message; }
+                Check(e1.Contains("findings.items") && e2.Contains("findings"), "coverage: findings.items that is not a list, or a findings section that is not an object, is refused (" + e1 + " / " + e2 + ")");
+                // the as-of block removed: not assessable
+                Bundle noAs = EnrichedFixture(Path.Combine(dir, "noas"), now, null); Json.Obj(noAs["findings"]).Remove("asOf"); object sn = Json.Get(VulnReport.Build(noAs, brand), "summary");
+                Check(Json.GetS(sn, "status") == "not-assessable" && (Json.GetS(sn, "headline") ?? "").StartsWith("NOT ASSESSABLE"), "coverage: a bundle whose as-of block was removed is NOT ASSESSABLE");
+                // the CLI writes the deliverables and exits 1 for a report that is not a clean assessment
+                string cli = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe");
+                if (File.Exists(cli)) { string pa = Path.Combine(dir, "a.ptb"); ba.Save(pa, BundleKey.None()); int xa; string oa = RunCli(cli, "report \"" + pa + "\" --plain --out \"" + Path.Combine(dir, "ca") + "\" --no-color", out xa); Check(xa == 1 && oa.Contains("NOT ASSESSABLE") && File.Exists(Path.Combine(dir, "ca", "FIXTURE_fx1_vulnerability.json")), "coverage CLI: an unassessable bundle still writes the deliverables and exits 1 (exit " + xa + ")"); }
+                else Check(false, "coverage CLI: PowerTowerCli.exe not found next to Tests.exe");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        /// <summary>Every written format carries the verdict in its headline (PDF: its last word, since the writer wraps at spaces) and none carries the clean wording; the JSON is parsed for summary.status; the CSV must open with the verdict line.</summary>
+        static bool FormatsSay(List<string> files, string verdict, string status, string alsoContains)
+        {
+            foreach (string f in files)
+            {
+                string t = f.EndsWith(".pdf") ? Encoding.GetEncoding(1252).GetString(File.ReadAllBytes(f)) : File.ReadAllText(f); bool ok;
+                if (f.EndsWith(".json")) { object j = Json.Parse(t); ok = Json.GetS(Json.Get(j, "summary"), "status") == status && (Json.GetS(Json.Get(j, "summary"), "headline") ?? "").StartsWith(verdict); }
+                else if (f.EndsWith(".pdf")) ok = t.Contains(verdict.Substring(verdict.LastIndexOf(' ') + 1));
+                else ok = t.Contains(verdict) && !t.Contains("No open vulnerabilities") && !t.Contains("is fixed on this build") && (alsoContains == null || t.Contains(alsoContains));
+                if (f.EndsWith(".csv")) ok = ok && Regex.IsMatch(t, "^\"?# " + verdict);
+                if (!ok) { Info("formats: " + Path.GetExtension(f) + " does not carry the verdict " + verdict); return false; }
+            }
+            return true;
+        }
+        /// <summary>PT-46: host-controlled text cannot inject Markdown. A remote image, a javascript: link, emphasis, backticks, raw HTML, a bare URL and an e-mail address in a product, a title, the evidence, the host, the domain and the brand footer stay inert in Markdown (raw, outside code spans), HTML (escaped, CSP, no href/src), CSV (formula-safe) and PDF (inside the string operand).</summary>
+        static void ReportMarkdown_()
+        {
+            DateTime now = new DateTime(2026, 10, 13); string dir = Path.Combine(Path.GetTempPath(), "pstools-mdi-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                string img = "![beacon](http://evil.example/x.png)", link = "[click](javascript:alert(1))", emph = "**bold** _it_ `code` ~~s~~ <b>b</b>", bare = "see http://evil.example/p?a=1&b=2 or www.evil.example and bob@evil.example";
+                Bundle b = EnrichedFixture(dir, now, img + " " + link); Brand brand = new Brand(); Dictionary<string, object> r = VulnReport.Build(b, brand);
+                List<object> rows = Json.Arr(Json.Get(r, "rows")); Dictionary<string, object> r0 = Json.Obj(rows[0]), r1 = Json.Obj(rows[1]); r0["title"] = img + " " + emph; r0["evidence"] = link + " " + bare; r1["title"] = bare; r1["fix"] = "`code` " + link; r1["evidence"] = emph;
+                Json.Obj(Json.Get(r, "subject"))["host"] = img; Json.Obj(Json.Get(r, "subject"))["domain"] = link; Json.Obj(Json.Get(r, "brand"))["footer"] = bare + " " + link + " " + emph;
+                string[] fmts = { "json", "csv", "md", "html", "pdf" }; List<string> w = ReportRender.WriteAll(r, brand, Path.Combine(dir, "o"), fmts);
+                string csv = File.ReadAllText(w[1]), md = File.ReadAllText(w[2]), html = File.ReadAllText(w[3]), pdf = Encoding.GetEncoding(1252).GetString(File.ReadAllBytes(w[4]));
+                // Markdown: the data survives, but only inside code spans (a span closes at a backtick run of the same length); outside them nothing active is left
+                string plain = Regex.Replace(Regex.Replace(md, "(?s)````.*?````", ""), "(`+)[\\s\\S]*?\\1(?!`)", "");
+                Check(md.Contains("http://evil.example/x.png") && md.Contains("javascript:alert(1)") && md.Contains("bob@evil.example"), "report md: the hostile strings are still in the report, as data");
+                bool mdInert = !plain.Contains("](") && !plain.Contains("![") && !plain.Contains("**bold**") && !plain.Contains("_it_") && !plain.Contains("~~") && !plain.Contains("<b>") && !Regex.IsMatch(plain, "(?i)https?://|www\\.|@evil");
+                if (!mdInert) Info("md plain residue: " + Regex.Match(plain, "(?i).{0,40}(\\]\\(|!\\[|\\*\\*bold|_it_|~~|<b>|https?://|www\\.|@evil).{0,40}").Value.Replace("\n", "\\n"));
+                Check(mdInert, "report md: outside code spans no link, image, emphasis, strikethrough, HTML tag, bare URL or e-mail address is left (PT-46)");
+                Check(md.Contains("# Endpoint Vulnerability Report — `![beacon](http://evil.example/x.png)`") && md.Contains("(`[click](javascript:alert(1))`)") && md.Contains("\\[click\\]\\(javascript:alert\\(1\\)\\)") && md.Contains("`http://evil.example/p?a=1&b=2`") && md.Contains("`bob@evil.example`") && md.Contains("\\*\\*bold\\*\\*") && md.Contains("&lt;b&gt;b&lt;/b&gt;"), "report md: cells, host and domain are code spans; prose is backslash-escaped with URLs and e-mail addresses as code; angle brackets are entities everywhere");
+                // HTML: everything is text; no element can fetch or run anything, and a CSP forbids it anyway
+                Check(html.Contains("Content-Security-Policy") && html.Contains("default-src 'none'") && !Regex.IsMatch(html, "<(a|img|script|iframe|link|object|embed)\\b", RegexOptions.IgnoreCase) && !Regex.IsMatch(html, "(?i)(href|src|action)\\s*=") && html.Contains("![beacon](http://evil.example/x.png)") && html.Contains("&lt;b&gt;b&lt;/b&gt;") && !html.Contains("<b>b</b>"), "report html: CSP present (PT-49); no a/img/script element and no href/src/action attribute; payloads are escaped text");
+                // CSV: data, quoted, never a formula
+                Check(csv.Contains(img) && csv.Contains("javascript:alert(1)") && !Regex.IsMatch(csv, "(^|,)\"?[=+@]", RegexOptions.Multiline), "report csv: payloads are plain quoted cells and no cell starts with = + or @");
+                // PDF: the payload parentheses are escaped inside their string operand (host and domain sit on one unwrapped header line), so the operand cannot be closed early
+                bool pJs = pdf.Contains("\\(javascript:alert\\(1\\)\\)"), pImg = pdf.Contains("beacon]\\(http://evil.example/x.png\\)"); Match pRaw = Regex.Match(pdf, "\\]\\(http|alert\\(1\\)");   // a payload parenthesis left unescaped (a string operand's own opening parenthesis is not one)
+                if (!pJs) { int at = pdf.IndexOf("javascript"); Info("pdf javascript context: " + (at < 0 ? "(absent)" : pdf.Substring(Math.Max(0, at - 50), Math.Min(130, pdf.Length - Math.Max(0, at - 50))).Replace("\n", "\\n").Replace("\r", "\\r"))); }
+                if (!pImg) { int at = pdf.IndexOf("beacon"); Info("pdf beacon context: " + (at < 0 ? "(absent)" : pdf.Substring(Math.Max(0, at - 50), Math.Min(130, pdf.Length - Math.Max(0, at - 50))).Replace("\n", "\\n").Replace("\r", "\\r"))); }
+                if (pRaw.Success) Info("pdf unescaped paren context: " + pdf.Substring(Math.Max(0, pRaw.Index - 60), Math.Min(150, pdf.Length - Math.Max(0, pRaw.Index - 60))).Replace("\n", "\\n").Replace("\r", "\\r"));
+                Check(pJs && pImg && !pRaw.Success, "report pdf: link and image syntax stay inside the string operand with escaped parentheses");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
