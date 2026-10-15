@@ -151,6 +151,60 @@ namespace PSTools
         public override Color SeparatorLight { get { return Theme.Line; } }
     }
 
+    /// <summary>A quick-filter chip for the filter bar (shared GUI kit). Two kinds: a toggle (on/off) and a dropdown
+    /// (a labelled value chosen from a small menu). Owner-drawn from Theme.* so it re-tints with the theme; active
+    /// (toggle on, or dropdown value past the first/default) shows the selection fill + accent border + a marker, so
+    /// a live filter is visible at a glance and never conveyed by colour alone. Keyboard: Space/Enter toggles or
+    /// opens the menu; the dropdown also opens on Down. Changed fires when the value changes.</summary>
+    public class FilterChip : Control
+    {
+        public readonly bool IsToggle; readonly string[] opts; int index; bool on, hover; public event Action Changed;
+        public FilterChip(string label, string[] options) { IsToggle = false; opts = options; Init(label); }   // dropdown
+        public FilterChip(string label) { IsToggle = true; opts = null; Init(label); }                          // toggle
+        void Init(string label)
+        {
+            Text = label; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+            TabStop = true; Cursor = Cursors.Hand; Height = Theme.S(26); Margin = new Padding(0, Theme.S(3), Theme.S(6), Theme.S(3)); BackColor = Theme.Side; AccessibleName = label; AccessibleRole = AccessibleRole.CheckButton;
+            Click += delegate { Activate(); }; GotFocus += delegate { Invalidate(); }; LostFocus += delegate { Invalidate(); };
+            MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); };
+            KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter || (!IsToggle && e.KeyCode == Keys.Down)) { e.Handled = true; Activate(); } };
+            Measure();
+        }
+        public int Index { get { return index; } set { index = value; Measure(); Invalidate(); } }
+        public bool On { get { return on; } set { on = value; Measure(); Invalidate(); } }
+        public string Value { get { return opts != null ? opts[index] : (on ? "on" : "off"); } }
+        public bool Active { get { return IsToggle ? on : index > 0; } }
+        public void Reset() { index = 0; on = false; Measure(); Invalidate(); }
+        void Activate() { if (IsToggle) { on = !on; Measure(); Invalidate(); Fire(); } else ShowMenu(); }
+        void Fire() { if (Changed != null) Changed(); }
+        string Caption() { return IsToggle || index == 0 ? Text : Text + ": " + opts[index]; }
+        void Measure() { using (Graphics g = CreateGraphics()) { int w = TextRenderer.MeasureText(g, Caption(), Theme.UIBold).Width; Width = w + Theme.S(IsToggle ? 22 : 30); } }
+        void ShowMenu()
+        {
+            ContextMenuStrip m = new ContextMenuStrip(); m.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors()); m.BackColor = Theme.Panel2; m.ForeColor = Theme.Ink; m.Font = Theme.UI; m.ShowImageMargin = false;
+            for (int i = 0; i < opts.Length; i++) { int k = i; ToolStripMenuItem it = new ToolStripMenuItem(opts[i]); it.ForeColor = Theme.Ink; it.Checked = i == index; it.Click += delegate { if (index != k) { index = k; Measure(); Invalidate(); Fire(); } }; m.Items.Add(it); }
+            m.Show(this, new Point(0, Height));
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics; g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            bool act = Active; Color border = act ? Theme.Teal : (hover ? Theme.Line : Theme.Line), fill = act ? Theme.SelBar : (hover ? Theme.Panel2 : Theme.Panel2), ink = act ? Theme.Teal : Theme.Dim;
+            Rectangle r = new Rectangle(0, 1, Width - 1, Height - 3); int rad = Theme.S(13);
+            using (System.Drawing.Drawing2D.GraphicsPath p = Round(r, rad)) { using (Brush b = new SolidBrush(fill)) g.FillPath(b, p); using (Pen pen = new Pen(border)) g.DrawPath(pen, p); }
+            if (Focused) using (Pen fp = new Pen(Theme.Teal) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot }) g.DrawPath(fp, Round(new Rectangle(2, 3, Width - 5, Height - 7), rad - 2));
+            Rectangle tr = new Rectangle(Theme.S(10), 0, Width - Theme.S(IsToggle ? 14 : 24), Height);
+            TextRenderer.DrawText(g, Caption(), act ? Theme.UIBold : Theme.UI, tr, ink, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            string mark = IsToggle ? (on ? "✕" : "") : "▾";
+            if (mark.Length > 0) TextRenderer.DrawText(g, mark, Theme.UISmall, new Rectangle(Width - Theme.S(16), 0, Theme.S(14), Height), ink, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+        }
+        static System.Drawing.Drawing2D.GraphicsPath Round(Rectangle r, int rad)
+        {
+            int d = rad * 2; System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath();
+            if (d > r.Height) d = r.Height; if (d > r.Width) d = r.Width;
+            p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90); p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90); p.CloseFigure(); return p;
+        }
+    }
+
     /// <summary>A grid, a details layout, or a tree over the same rows, with checkbox multi-select, sort, search, per-column filter rules, export.</summary>
     public class DataView : UserControl
     {

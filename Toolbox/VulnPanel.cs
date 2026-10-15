@@ -15,15 +15,18 @@ namespace PSTools
     public class Stat : Control
     {
         public string Caption, Value = "—", Sub = ""; public Color Colour = Theme.Ink;
-        public Stat(string caption) { Caption = caption; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true); BackColor = Theme.Side; Margin = new Padding(0, 0, Theme.S(8), 0); }
+        public Action Filter; public bool Active; bool hover;   // a clickable card toggles a filter chip (design.md 2.6)
+        public Stat(string caption) { Caption = caption; SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true); BackColor = Theme.Side; Margin = new Padding(0, 0, Theme.S(8), 0); MouseEnter += delegate { if (Filter != null) { hover = true; Invalidate(); } }; MouseLeave += delegate { hover = false; Invalidate(); }; Click += delegate { if (Filter != null) Filter(); }; }
         public void Set(string value, string sub, Color colour) { Value = value; Sub = sub; Colour = colour; Invalidate(); }
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics; g.Clear(Theme.Side);
+            Cursor = Filter != null ? Cursors.Hand : Cursors.Default;
+            Graphics g = e.Graphics; g.Clear(Active ? Theme.SelBar : (hover && Filter != null ? Theme.Panel2 : Theme.Side));
             TextRenderer.DrawText(g, Caption.ToUpperInvariant(), Theme.UISmall, new Point(Theme.S(10), Theme.S(6)), Theme.Faint, TextFormatFlags.NoPrefix);
             TextRenderer.DrawText(g, Value, Theme.Big, new Rectangle(Theme.S(8), Theme.S(20), Width - Theme.S(12), Theme.S(24)), Colour, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             TextRenderer.DrawText(g, Sub, Theme.UISmall, new Rectangle(Theme.S(10), Theme.S(46), Width - Theme.S(14), Theme.S(16)), Theme.Dim, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
-            using (Pen p = new Pen(Colour == Theme.Ink ? Theme.Line : Colour)) g.DrawLine(p, 0, 0, 0, Height);
+            using (Pen p = new Pen(Active ? Theme.Teal : (Colour == Theme.Ink ? Theme.Line : Colour))) { if (Active) g.DrawRectangle(p, 0, 0, Width - 1, Height - 1); else g.DrawLine(p, 0, 0, 0, Height); }
+            if (Active) TextRenderer.DrawText(g, "✓", Theme.UISmall, new Rectangle(0, Theme.S(5), Width - Theme.S(7), Theme.S(12)), Theme.Teal, TextFormatFlags.Right | TextFormatFlags.NoPrefix);
         }
     }
 
@@ -33,7 +36,7 @@ namespace PSTools
         public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
         readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Button bFind, bMissing, bSoft, bFix, bScan, bCancel, bFeeds, bLog, bSave; readonly CheckBox cWua, cMsrc, cNvd, cKev, cEpss; readonly NumericUpDown nMonths; readonly TextBox tKey; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
         readonly Stat sOs = new Stat("OS build"), sReboot = new Stat("reboot"), sCrit = new Stat("critical"), sHigh = new Stat("high"), sKev = new Stat("known exploited"), sMissing = new Stat("missing updates"), sSoft = new Stat("software");
-        readonly ComboBox cSev, cStatus, cSource; readonly CheckBox cKevOnly; readonly Label lSev, lStatus, lSource;
+        readonly FilterChip chSev, chStatus, chSource, chKev, chFix; readonly Button bOptions;
         string mode = "findings"; VulnScan scan; FeedCache cache; bool settingsLoaded; readonly StepStrip steps = new StepStrip();
         /// <summary>The open findings from the last scan this session (empty if none), for the Findings Map.</summary>
         public List<Finding> OpenFindings() { List<Finding> l = new List<Finding>(); if (scan != null) foreach (Finding f in scan.FindingsSnapshot()) if (f.Open) l.Add(f); return l; }
@@ -50,19 +53,31 @@ namespace PSTools
             tip.SetToolTip(cWua, "Ask the Windows Update Agent which updates apply here and are not installed (slow: 20 s to a few minutes), plus the install history."); tip.SetToolTip(cMsrc, "Microsoft's monthly security releases (CVRF): compare the OS build/UBR with each fix's FixedBuild, KB supersedence as fallback."); tip.SetToolTip(cNvd, "Installed software in the product map, looked up on the NVD at the installed version. Without a key: one product every 6.5 s.");
             tip.SetToolTip(cKev, "Flag CVEs in CISA's Known Exploited Vulnerabilities catalogue."); tip.SetToolTip(cEpss, "Exploit Prediction Scoring System: how likely each open CVE is to be exploited in the next 30 days.");
             Label lm = Theme.Lbl("months", Theme.Dim, Theme.UI); nMonths = Theme.Num(3, 1, 12, 52); tip.SetToolTip(nMonths, "The fewest monthly MSRC releases to check, newest first. The scan widens this to the host's patch level automatically (up to 36), so a machine that is a year behind is covered without changing it."); Label lk = Theme.Lbl("NVD key", Theme.Dim, Theme.UI); tKey = Theme.Text("", 130); tKey.UseSystemPasswordChar = true; tip.SetToolTip(tKey, "Optional free NVD API key (nvd.nist.gov/developers/request-an-api-key): 50 requests per 30 s instead of 5. Saved in settings.ini next to the exe.");
+            // Options ▾ : the former loose source checkboxes + months + NVD key, re-homed into one drop-down (design.md 2.2/2.4)
+            FlowLayoutPanel opts = new FlowLayoutPanel(); opts.FlowDirection = FlowDirection.TopDown; opts.AutoSize = true; opts.AutoSizeMode = AutoSizeMode.GrowAndShrink; opts.WrapContents = false; opts.BackColor = Theme.Panel2; opts.Padding = new Padding(Theme.S(10), Theme.S(8), Theme.S(12), Theme.S(8));
+            Label oh = Theme.Lbl("Feed sources", Theme.Dim, Theme.UIBold); oh.Margin = new Padding(0, 0, 0, Theme.S(4));
+            FlowLayoutPanel mrow = new FlowLayoutPanel(); mrow.AutoSize = true; mrow.WrapContents = false; mrow.Margin = new Padding(0, Theme.S(6), 0, 0); mrow.Controls.Add(lm); mrow.Controls.Add(nMonths);
+            FlowLayoutPanel krow = new FlowLayoutPanel(); krow.AutoSize = true; krow.WrapContents = false; krow.Margin = new Padding(0, Theme.S(2), 0, 0); krow.Controls.Add(lk); krow.Controls.Add(tKey);
+            foreach (Control c in new Control[] { oh, cWua, cMsrc, cNvd, cKev, cEpss, mrow, krow }) opts.Controls.Add(c);
+            ToolStripDropDown odd = new ToolStripDropDown(); odd.AutoClose = true; odd.Padding = Padding.Empty; odd.BackColor = Theme.Panel2; ToolStripControlHost ohost = new ToolStripControlHost(opts); ohost.Margin = Padding.Empty; ohost.Padding = Padding.Empty; ohost.AutoSize = true; odd.Items.Add(ohost);
+            bOptions = Theme.Btn("Sources ▾", false); bOptions.Click += delegate { odd.Show(bOptions, new Point(0, bOptions.Height)); };
+            Action optCap = delegate { int on = (cWua.Checked ? 1 : 0) + (cMsrc.Checked ? 1 : 0) + (cNvd.Checked ? 1 : 0) + (cKev.Checked ? 1 : 0) + (cEpss.Checked ? 1 : 0); bOptions.Text = "Sources " + on + "/5 ▾"; bOptions.ForeColor = on < 5 ? Theme.Amber : Theme.Ink; };
+            foreach (CheckBox c in new CheckBox[] { cWua, cMsrc, cNvd, cKev, cEpss }) c.CheckedChanged += delegate { optCap(); }; odd.Closed += delegate { SaveSettings(); optCap(); };
             bFeeds = Theme.Btn("Feed cache…", false); bFeeds.Click += delegate { FeedsDialog(); }; bLog = Theme.Btn("Log…", false); bLog.Click += delegate { ShowLog(); };
             bSave = Theme.MenuBtn("Save report", new string[] { "Markdown (.md)", "JSON (.json)", "PDF (.pdf)", "CSV (.csv)" }, delegate (int i) { Save(i == 0 ? "md" : i == 1 ? "json" : i == 2 ? "pdf" : "csv"); }); bSave.Enabled = false;
             new ToolTip().SetToolTip(bSave, "Save the vulnerability report (all findings, not the filtered view) through the same engine as `PowerTowerCli report`. A partial scan (feeds off or unavailable) is marked NOT ASSESSABLE / INCOMPLETE COVERAGE, never clean.");
             Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1;
-            foreach (Control c in new Control[] { bFind, bMissing, bSoft, bFix, gap, bScan, bCancel, cWua, cMsrc, cNvd, cKev, cEpss, lm, nMonths, lk, tKey, bSave, bFeeds, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
+            FlowLayoutPanel segv = new FlowLayoutPanel(); segv.AutoSize = true; segv.AutoSizeMode = AutoSizeMode.GrowAndShrink; segv.WrapContents = false; segv.FlowDirection = FlowDirection.LeftToRight; segv.Margin = new Padding(0, Theme.S(4), Theme.S(6), 0);
+            foreach (Button b in new Button[] { bFind, bMissing, bSoft, bFix }) { b.Margin = new Padding(0, 0, -1, 0); segv.Controls.Add(b); }   // a gapless segmented control (design.md 2.3)
+            optCap();
+            foreach (Control c in new Control[] { segv, gap, bScan, bCancel, bOptions, bSave, bFeeds, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             // the summary strip
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 7; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sOs, sReboot, sCrit, sHigh, sKev, sMissing, sSoft }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, s == sOs ? 22 : s == sReboot ? 16 : 12.4f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
             // the rows
             view = NewView("vulnerability-findings");
-            lSev = Theme.Lbl("severity", Theme.Dim, Theme.UI); cSev = Theme.Combo(96, "all", "critical", "high +", "medium +"); lStatus = Theme.Lbl("status", Theme.Dim, Theme.UI); cStatus = Theme.Combo(128, "open", "all", "vulnerable", "update available", "reboot pending", "patched", "unconfirmed"); lSource = Theme.Lbl("source", Theme.Dim, Theme.UI); cSource = Theme.Combo(130, "all", "MSRC", "NVD", "Windows Update"); cKevOnly = Theme.Toggle("exploited only", false);
-            foreach (Control c in new Control[] { lSev, cSev, lStatus, cStatus, lSource, cSource, cKevOnly }) view.Extra.Controls.Add(c);
-            cSev.SelectedIndexChanged += delegate { view.Refilter(); }; cStatus.SelectedIndexChanged += delegate { view.Refilter(); }; cSource.SelectedIndexChanged += delegate { view.Refilter(); }; cKevOnly.CheckedChanged += delegate { view.Refilter(); };
+            chSev = new FilterChip("Severity", new string[] { "all", "critical", "high +", "medium +" }); chStatus = new FilterChip("Status", new string[] { "open", "all", "vulnerable", "update available", "reboot pending", "patched", "unconfirmed" }); chSource = new FilterChip("Source", new string[] { "all", "MSRC", "NVD", "Windows Update" }); chKev = new FilterChip("KEV only"); chFix = new FilterChip("Has fix");
+            foreach (FilterChip c in new FilterChip[] { chSev, chStatus, chSource, chKev, chFix }) { c.Changed += delegate { view.Refilter(); UpdateCards(); }; view.Extra.Controls.Add(c); }
             view.Filter = FilterRow;
             view.SelectionChanged += delegate { sel.Update(view.SelectedCount, Noun()); };
             view.Activated += delegate (object o)
@@ -72,6 +87,8 @@ namespace PSTools
                 Hotfix h = o as Hotfix; if (h != null && h.Kb.Length > 0) { Open("https://support.microsoft.com/help/" + h.Kb); return; }
                 Software s = o as Software; if (s != null && s.Mapped) Open("https://nvd.nist.gov/vuln/search/results?form_type=Advanced&cpe_vendor=cpe%3A%2F%3A" + Uri.EscapeDataString(s.Vendor) + "&cpe_product=cpe%3A%2F%3A" + Uri.EscapeDataString(s.Vendor) + "%3A" + Uri.EscapeDataString(s.Product));
             };
+            sCrit.Filter = delegate { ToggleSev("critical"); }; sHigh.Filter = delegate { ToggleSev("high +"); }; sKev.Filter = delegate { chKev.On = !chKev.On; view.Refilter(); UpdateCards(); };
+            sMissing.Filter = delegate { SetMode("missing"); }; sSoft.Filter = delegate { SetMode("software"); };
             Controls.Add(view); Controls.Add(sel); Controls.Add(strip); Controls.Add(steps); Controls.Add(bar); view.BringToFront();
             SetMode("findings");
         }
@@ -97,8 +114,8 @@ namespace PSTools
         void SetMode(string m)
         {
             mode = m;
-            foreach (Button b in new Button[] { bFind, bMissing, bSoft, bFix }) { bool on = (b == bFind && m == "findings") || (b == bMissing && m == "missing") || (b == bSoft && m == "software") || (b == bFix && m == "hotfixes"); b.BackColor = on ? Theme.Panel3 : Theme.Panel2; b.ForeColor = on ? Theme.Teal : Theme.Ink; b.FlatAppearance.BorderColor = on ? Theme.Teal : Theme.Line; }
-            bool findings = m == "findings"; foreach (Control c in new Control[] { lSev, cSev, lStatus, cStatus, lSource, cSource, cKevOnly }) c.Visible = findings;
+            foreach (Button b in new Button[] { bFind, bMissing, bSoft, bFix }) Theme.SetTab(b, (b == bFind && m == "findings") || (b == bMissing && m == "missing") || (b == bSoft && m == "software") || (b == bFix && m == "hotfixes"));
+            bool findings = m == "findings"; foreach (Control c in new Control[] { chSev, chStatus, chSource, chKev, chFix }) c.Visible = findings;
             sel.Clear();
             if (findings)
             {
@@ -126,14 +143,17 @@ namespace PSTools
             sel.Add("Export selected…", false, delegate { view.Export(); }); sel.Add("Clear selection", false, delegate { view.ClearSelection(); });
             Reload();
         }
+        void ToggleSev(string v) { string[] o = { "all", "critical", "high +", "medium +" }; chSev.Index = chSev.Value == v ? 0 : Array.IndexOf(o, v); view.Refilter(); UpdateCards(); }
+        void UpdateCards() { if (chSev == null) return; sCrit.Active = chSev.Value == "critical"; sHigh.Active = chSev.Value == "high +"; sKev.Active = chKev.On; sCrit.Invalidate(); sHigh.Invalidate(); sKev.Invalidate(); }
         bool FilterRow(object o)
         {
             Finding f = o as Finding; if (f == null) return true;
             int sev = Resolve.SevRank(f.SeverityNorm);
-            switch (cSev.SelectedIndex) { case 1: if (sev < 4) return false; break; case 2: if (sev < 3) return false; break; case 3: if (sev < 2) return false; break; }
-            string st = (string)cStatus.SelectedItem; if (st == "open") { if (!f.Open) return false; } else if (st != "all" && f.Status != st) return false;
-            if (cSource.SelectedIndex > 0 && f.Source != (string)cSource.SelectedItem) return false;
-            if (cKevOnly.Checked && !f.Kev && !f.Exploited) return false;
+            switch (chSev.Index) { case 1: if (sev < 4) return false; break; case 2: if (sev < 3) return false; break; case 3: if (sev < 2) return false; break; }
+            string st = chStatus.Value; if (st == "open") { if (!f.Open) return false; } else if (st != "all" && f.Status != st) return false;
+            if (chSource.Index > 0 && f.Source != chSource.Value) return false;
+            if (chKev.On && !f.Kev && !f.Exploited) return false;
+            if (chFix.On && (f.Fix == null || f.Fix.Trim().Length == 0)) return false;
             return true;
         }
 
@@ -149,7 +169,7 @@ namespace PSTools
                 else if (mode == "software") foreach (Software s in scan.SoftwareSnapshot()) items.Add(s);
                 else foreach (Hotfix h in scan.HotfixSnapshot()) items.Add(h);
             }
-            view.SetItems(items, true); Cards(); if (bSave != null) bSave.Enabled = scan != null && scan.FinishedAt != DateTime.MinValue;
+            view.SetItems(items, true); Cards(); UpdateCards(); if (bSave != null) bSave.Enabled = scan != null && scan.FinishedAt != DateTime.MinValue;
         }
         void Cards()
         {
