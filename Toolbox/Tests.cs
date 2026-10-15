@@ -21,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_, RemoteInject_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_, RemoteInject_, CredsCli_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -1346,6 +1346,90 @@ namespace PSTools
                 RunResult r = ctl.RunOne(Ph3Target("10.0.0.10"), new RunOptions());
                 string journalText = File.Exists(jp) ? File.ReadAllText(jp) : "";
                 Check((r.Detail ?? "").IndexOf(SECRET) < 0 && journalText.IndexOf(SECRET) < 0 && (r.Detail ?? "").IndexOf("***") >= 0, "inject (PT-61): a transport exception that echoes the password is scrubbed in the detail and the journal");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── the "creds" CLI: writes creds.ptv; the secret only enters via stdin or an env var, never argv, never plaintext on disk ──
+        static string CredsCli(string exe, string args, string stdinLine, string envName, string envVal, out int exit)
+        {
+            ProcessStartInfo psi = new ProcessStartInfo(exe, args); psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.RedirectStandardInput = true; psi.CreateNoWindow = true;
+            if (envName != null) psi.EnvironmentVariables[envName] = envVal;
+            using (Process p = Process.Start(psi))
+            {
+                try { if (stdinLine != null) p.StandardInput.WriteLine(stdinLine); } catch { }
+                try { p.StandardInput.Close(); } catch { }
+                string so = p.StandardOutput.ReadToEnd(), se = p.StandardError.ReadToEnd(); p.WaitForExit(60000); exit = p.ExitCode; return so + "\n" + se;
+            }
+        }
+        static void CredsCli_()
+        {
+            string exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe");
+            if (!File.Exists(exe)) { Check(false, "creds: PowerTowerCli.exe not found next to Tests.exe"); return; }
+            const string S1 = "Cr3d-CLI-SECRET-one-!xyz", S2 = "Cr3d-CLI-SECRET-two-#qpz";
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-creds-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                Engagement eng = EngagementTool.New(dir, "ENG-CRED", "Acme", "ops", new string[] { "10.0.0.0/24" }, DateTime.UtcNow.AddDays(-1), DateTime.UtcNow.AddDays(1), null, 60, "", 2048);
+                string jf = Path.Combine(dir, "engagement.json"); string cp = Path.Combine(dir, "creds.ptv");
+                string q = "\"" + jf + "\"";
+
+                // add via --secret-stdin
+                int x1; string o1 = CredsCli(exe, "creds add " + q + " --label lab --user CORP\\svc-audit --secret-stdin", S1, null, null, out x1);
+                bool bytesClean1 = !File.Exists(cp) || IndexOf(File.ReadAllBytes(cp), Encoding.UTF8.GetBytes(S1)) < 0;
+                Check(x1 == 0 && File.Exists(cp) && o1.IndexOf(S1) < 0 && bytesClean1, "creds add (--secret-stdin): stores the entry; the secret is not in the output and not plaintext in creds.ptv (exit " + x1 + ")");
+
+                // add a second entry via --secret-env; the first is preserved
+                int x2; string o2 = CredsCli(exe, "creds add " + q + " --label lab2 --user CORP\\svc2 --secret-env PTV_TSEC", null, "PTV_TSEC", S2, out x2);
+                List<CredEntry> after2 = CredStore.Load(cp, null, eng.Id);
+                bool bytesClean2 = IndexOf(File.ReadAllBytes(cp), Encoding.UTF8.GetBytes(S1)) < 0 && IndexOf(File.ReadAllBytes(cp), Encoding.UTF8.GetBytes(S2)) < 0;
+                Check(x2 == 0 && o2.IndexOf(S2) < 0 && after2.Count == 2 && bytesClean2, "creds add (--secret-env): adds a second entry, preserves the first, neither secret is plaintext in the file (" + after2.Count + " entries)");
+
+                // list shows labels + usernames only, never the secret
+                int x3; string o3 = CredsCli(exe, "creds list " + q, null, null, null, out x3);
+                Check(x3 == 0 && o3.IndexOf("lab") >= 0 && o3.IndexOf("CORP\\svc-audit") >= 0 && o3.IndexOf("lab2") >= 0 && o3.IndexOf(S1) < 0 && o3.IndexOf(S2) < 0, "creds list: labels and usernames only, never the secret");
+
+                // the store written by the CLI loads in remote-audit's resolver and authenticates the target
+                List<CredEntry> loaded = CredStore.Load(cp, null, eng.Id);
+                FakeTransport ok = new FakeTransport(); Func<TargetSpec, ITransport> mk = delegate (TargetSpec ts) { return ok; };
+                Func<string, NetworkCred> res = delegate (string lbl) { foreach (CredEntry ce in loaded) if (string.Equals(ce.Label, lbl, StringComparison.OrdinalIgnoreCase)) return new NetworkCred(ce.User, (byte[])ce.Secret.Clone()); return null; };
+                RemoteAudit ctl = new RemoteAudit(eng, new RunJournal(Path.Combine(dir, "j.ndjson")), mk, res, DateTime.UtcNow);
+                TargetSpec tg = new TargetSpec(); tg.Host = "10.0.0.10"; tg.CredLabel = "lab"; tg.TimeoutSec = 5;
+                RunResult rr = ctl.RunOne(tg, new RunOptions());
+                Check(rr.Status == "ok" && ok.LastSecretSeen == S1 && rr.User == "CORP\\svc-audit", "creds -> remote-audit: a target using label 'lab' resolves the stored credential and authenticates (status " + rr.Status + ")");
+                foreach (CredEntry ce in loaded) ce.Zero();
+
+                // remove deletes only the named entry
+                int x4; CredsCli(exe, "creds remove " + q + " --label lab", null, null, null, out x4);
+                List<CredEntry> after4 = CredStore.Load(cp, null, eng.Id);
+                Check(x4 == 0 && after4.Count == 1 && after4[0].Label == "lab2", "creds remove: deletes only the named entry, preserves the rest");
+
+                // a DPAPI store bound to one engagement will not load under another id (reused CredStore behaviour)
+                string wrong = ""; try { CredStore.Load(cp, null, "OTHER-ENG"); } catch (Exception ex) { wrong = ex.Message; }
+                Check(wrong.Length > 0, "creds: a DPAPI store for engagement A does not load under engagement B");
+
+                // there is no CLI option that takes the secret as an argv value
+                int xh; string help = CredsCli(exe, "creds add " + q + " --help", null, null, null, out xh);
+                Check(help.IndexOf("--secret-stdin") >= 0 && help.IndexOf("--secret-env") >= 0 && help.IndexOf("--password") < 0 && help.IndexOf("--secret <") < 0, "creds: the only secret inputs are --secret-stdin and --secret-env; no option takes the secret as a value");
+
+                // fuzz / fail-closed
+                int xe1; string oe1 = CredsCli(exe, "creds add " + q + " --label e1 --user u1 --secret-stdin", "", null, null, out xe1);
+                Check(xe1 != 0 && oe1.IndexOf("no secret") >= 0, "creds fuzz: an empty stdin secret is refused, nothing stored");
+                int xe2; CredsCli(exe, "creds add " + q + " --label e2 --user u2 --secret-env PTV_MISSING_" + Guid.NewGuid().ToString("N"), null, null, null, out xe2);
+                Check(xe2 != 0, "creds fuzz: a missing env var is refused");
+                int xe3; CredsCli(exe, "creds add " + q + " --label \"a&b|c\" --user u3 --secret-env PTV_TSEC", null, "PTV_TSEC", S2, out xe3);
+                int xe4; CredsCli(exe, "creds add " + q + " --label " + new string('L', 90) + " --user u4 --secret-env PTV_TSEC", null, "PTV_TSEC", S2, out xe4);
+                List<CredEntry> afterFuzz = CredStore.Load(cp, null, eng.Id);
+                Check(xe3 != 0 && xe4 != 0 && afterFuzz.Count == 1, "creds fuzz: a label with injection characters or over 64 chars is refused and the store is unchanged (" + afterFuzz.Count + " entry)");
+                // a corrupt creds.ptv is refused clearly, not overwritten, no crash
+                string badcp = Path.Combine(dir, "bad.ptv"); File.WriteAllBytes(badcp, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
+                int xe5; string oe5 = CredsCli(exe, "creds list " + q + " --creds \"" + badcp + "\"", null, null, null, out xe5);
+                Check(xe5 != 0 && oe5.IndexOf(S1) < 0 && oe5.IndexOf(S2) < 0, "creds fuzz: a corrupt creds.ptv is refused with a clear error, no crash, no secret");
+                // a secret with spaces and unicode round-trips via env
+                int xe6; CredsCli(exe, "creds add " + q + " --label uni --user u5 --secret-env PTV_U", null, "PTV_U", "p\u00e4ss word \u2603", out xe6);
+                List<CredEntry> uni = CredStore.Load(cp, null, eng.Id); string got = ""; foreach (CredEntry ce in uni) if (ce.Label == "uni") got = Encoding.UTF8.GetString(ce.Secret);
+                Check(xe6 == 0 && got == "p\u00e4ss word \u2603", "creds fuzz: a secret with spaces and unicode round-trips through the store");
+                foreach (CredEntry ce in uni) ce.Zero();
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }

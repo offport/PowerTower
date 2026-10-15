@@ -299,6 +299,8 @@ namespace PSTools
                 "Export the downloaded vulnerability feeds as a feed pack, or import one, so an analyst box without internet can still enrich bundles."),
             new ToolInfo("report", "Report", AUDIT, false,
                 "Turn an enriched bundle into the deliverables: Endpoint Hardening Audit, Endpoint Vulnerability Report and Compromise Assessment, as HTML, Markdown, CSV, JSON and PDF, with the framework mapping."),
+            new ToolInfo("creds", "Credential store", AUDIT, false,
+                "Manage the credential store (creds.ptv) for an engagement: add or replace an entry, list the labels and usernames, or remove one. The secret is read only from stdin (--secret-stdin) or an environment variable (--secret-env NAME), never from the command line, and is kept only inside the DPAPI- or passphrase-encrypted creds.ptv that remote-audit reads."),
             new ToolInfo("remote-audit", "Remote Audit (agentless)", AUDIT, false,
                 "Run the read-only collector on remote Windows hosts over SMB+WMI with supplied admin credentials, pull the sealed bundle and leave nothing behind. Engagement scope and window are enforced before any credential is sent; one logon attempt per target (no lockout); the staged files are removed and the removal is verified; an append-only journal records every run. --preflight tests reachability only."),
             new ToolInfo("engagement", "Engagement", AUDIT, false,

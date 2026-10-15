@@ -153,6 +153,20 @@ namespace PSTools
             l[l.Count - 1].Run = Browsing; l[l.Count - 1].Tables = delegate { return new List<TableDef>(new TableDef[] { Columns.BrowserHistory(), Columns.BrowserDomains(new List<DomainStat>()), Columns.BrowserDownloads(), Columns.BrowserSearches(), Columns.BrowserPasswords(delegate { return false; }) }); };
 
             l.Add(new CliTool("findings-map")); l[l.Count - 1].Run = GuiOnly;
+            l.Add(new CliTool("creds")
+                .Opt("engagement", "file", "the engagement.json whose id binds the store and whose folder holds creds.ptv (or give it as the second argument)")
+                .Opt("label", "name", "the credential label (add / remove); letters, digits, . _ -")
+                .Opt("user", "DOMAIN\\user", "the account the secret is for (add)")
+                .Opt("secret-stdin", null, "read the secret as one line from standard input (add) - the only ways to pass a secret")
+                .Opt("secret-env", "NAME", "read the secret from this environment variable (add)")
+                .Opt("creds", "file", "the store file (default: creds.ptv beside the engagement)")
+                .Opt("pass-env", "NAME", "passphrase for a passphrase-protected store, from this environment variable")
+                .Opt("pass-file", "file", "passphrase for a passphrase-protected store, from this file")
+                .Example("creds add eng.json --label lab --user CORP\\svc-audit --secret-stdin")
+                .Example("printf %s \"$PW\" | creds add eng.json --label lab --user svc --secret-stdin")
+                .Example("creds list eng.json")
+                .Example("creds remove eng.json --label lab"));
+            l[l.Count - 1].Run = Creds_;
             l.Add(new CliTool("remote-audit")
                 .Opt("engagement", "file", "the engagement.json whose scope, window and public key govern the run (or give it as the first argument)")
                 .Opt("target", "host", "one target host or IP; repeatable")
@@ -177,6 +191,68 @@ namespace PSTools
         }
 
         static byte[] U8(string s) { return new System.Text.UTF8Encoding(false).GetBytes(s ?? ""); }
+        static void CredSave(string path, List<CredEntry> entries, byte[] pass, string engId) { if (pass != null) CredStore.SavePass(path, entries, pass); else CredStore.SaveDpapi(path, entries, engId); }
+        static int Creds_(Args a)
+        {
+            ToolInfo info = Tools.ByKey("creds"); Out.Header(info);
+            string verb = a.Positional.Count > 0 ? a.Positional[0].ToLowerInvariant() : "";
+            if (verb != "add" && verb != "list" && verb != "remove") throw new UsageException("creds <add|list|remove> --engagement <engagement.json>");
+            string engPath = a.Get("engagement", a.Positional.Count > 1 ? a.Positional[1] : null);
+            if (engPath == null) throw new UsageException("--engagement <engagement.json>, or give it as the second argument");
+            Engagement eng; try { eng = Engagement.Load(engPath); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+            string engDir = Path.GetDirectoryName(Path.GetFullPath(engPath));
+            string credsPath = a.Get("creds", Path.Combine(engDir, "creds.ptv"));
+            byte[] pass = null;
+            if (a.Has("pass-env")) pass = U8(Environment.GetEnvironmentVariable(a.Get("pass-env", "")) ?? "");
+            else if (a.Has("pass-file")) { try { pass = File.ReadAllBytes(a.Get("pass-file", "")); } catch (Exception ex) { Out.Error("--pass-file: " + ex.Message); return Cli.USAGE; } }
+
+            List<CredEntry> entries;
+            if (File.Exists(credsPath)) { try { entries = CredStore.Load(credsPath, pass, eng.Id); } catch (BundleException ex) { Out.Error("creds.ptv: " + ex.Message + " (refusing to overwrite it)"); if (pass != null) Array.Clear(pass, 0, pass.Length); return Cli.PROBLEMS; } }
+            else entries = new List<CredEntry>();
+            try
+            {
+                if (verb == "list")
+                {
+                    Out.Line("  " + entries.Count + " credential(s) in " + credsPath, Tone.Dim);
+                    foreach (CredEntry e in entries) Out.Line("  " + (e.Label.Length > 24 ? e.Label.Substring(0, 24) : e.Label).PadRight(24) + "  " + e.User);   // labels and usernames only; never the secret
+                    return Cli.OK;
+                }
+                if (verb == "remove")
+                {
+                    string rl = a.Get("label", null); if (rl == null) throw new UsageException("creds remove needs --label <name>");
+                    int before = entries.Count; entries.RemoveAll(delegate (CredEntry e) { return string.Equals(e.Label, rl, StringComparison.OrdinalIgnoreCase); });
+                    if (entries.Count == before) { Out.Warn("no credential labelled '" + rl + "'"); return Cli.OK; }
+                    CredSave(credsPath, entries, pass, eng.Id); Out.Ok("removed '" + rl + "' - " + entries.Count + " credential(s) left"); return Cli.OK;
+                }
+                // add
+                string label = a.Get("label", null), user = a.Get("user", null);
+                if (label == null || user == null) throw new UsageException("creds add needs --label <name> and --user <DOMAIN\\user>");
+                if (!CredsValidLabel(label)) throw new UsageException("--label must be 1-64 of letters, digits, . _ - (so a target line can reference it)");
+                if (!CredsValidUser(user)) throw new UsageException("--user must be 1-256 characters with no control character");
+                if (a.Has("secret-stdin") == a.Has("secret-env")) throw new UsageException("give the secret with exactly one of --secret-stdin or --secret-env <NAME> - never on the command line");
+                byte[] secret;
+                if (a.Has("secret-stdin"))
+                {
+                    string line = Console.In.ReadLine(); if (string.IsNullOrEmpty(line)) { Out.Error("no secret on standard input"); return Cli.USAGE; }
+                    secret = U8(line); line = null;
+                }
+                else
+                {
+                    string env = a.Get("secret-env", ""); string v = Environment.GetEnvironmentVariable(env);
+                    if (string.IsNullOrEmpty(v)) { Out.Error("--secret-env: the variable " + env + " is not set or is empty"); return Cli.USAGE; }
+                    secret = U8(v);
+                }
+                entries.RemoveAll(delegate (CredEntry e) { return string.Equals(e.Label, label, StringComparison.OrdinalIgnoreCase); });   // add-or-replace
+                CredEntry ne = new CredEntry(); ne.Label = label; ne.User = user; ne.Secret = secret; entries.Add(ne);
+                CredSave(credsPath, entries, pass, eng.Id);
+                Out.Ok("stored '" + label + "' for " + user + " in " + credsPath + " (" + (pass != null ? "passphrase-protected" : "DPAPI, bound to " + Environment.UserName + " and " + eng.Id) + ")");
+                return Cli.OK;
+            }
+            finally { foreach (CredEntry e in entries) e.Zero(); if (pass != null) Array.Clear(pass, 0, pass.Length); }
+        }
+        static bool CredsValidLabel(string s) { if (s == null || s.Length == 0 || s.Length > 64) return false; foreach (char c in s) if (!(char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '-')) return false; return true; }
+        static bool CredsValidUser(string s) { if (s == null || s.Length == 0 || s.Length > 256) return false; foreach (char c in s) if (c < ' ') return false; return true; }
+
         static string Short80(string s) { if (s == null) return ""; return s.Length > 80 ? s.Substring(0, 80) + "\u2026" : s; }   // PT-66: never echo a hostile target line in full
         static int RemoteAudit_(Args a)
         {
