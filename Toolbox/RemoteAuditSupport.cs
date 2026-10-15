@@ -80,7 +80,9 @@ namespace PSTools
         {
             string dir = System.IO.Path.GetDirectoryName(path); if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             try { if (File.Exists(path)) File.SetAttributes(path, FileAttributes.Normal); } catch { }   // a re-save must be able to overwrite the previous (hidden) file
-            using (FileStream fs = File.Create(path)) { fs.Write(magic, 0, 4); fs.WriteByte(V); fs.Write(body, 0, body.Length); }
+            string tmp = path + ".tmp-" + Guid.NewGuid().ToString("N").Substring(0, 8);   // PT-71: write to a temp file, then replace, so the old store is never truncated in place
+            using (FileStream fs = File.Create(tmp)) { fs.Write(magic, 0, 4); fs.WriteByte(V); fs.Write(body, 0, body.Length); fs.Flush(); }
+            try { if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path); } catch { try { if (File.Exists(path)) File.Delete(path); File.Move(tmp, path); } finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } } }
             try { File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden); } catch { }
         }
         static byte[] Serialize(List<CredEntry> entries)

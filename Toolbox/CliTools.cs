@@ -233,8 +233,7 @@ namespace PSTools
                 byte[] secret;
                 if (a.Has("secret-stdin"))
                 {
-                    string line = Console.In.ReadLine(); if (string.IsNullOrEmpty(line)) { Out.Error("no secret on standard input"); return Cli.USAGE; }
-                    secret = U8(line); line = null;
+                    string serr; secret = ReadStdinSecret(out serr); if (secret == null) { Out.Error(serr); return Cli.USAGE; }
                 }
                 else
                 {
@@ -249,6 +248,34 @@ namespace PSTools
                 return Cli.OK;
             }
             finally { foreach (CredEntry e in entries) e.Zero(); if (pass != null) Array.Clear(pass, 0, pass.Length); }
+        }
+        /// <summary>PT-69/70: read the secret from stdin as RAW BYTES, so no console code page or BOM mangles it. Strip one
+        /// leading UTF-8 BOM and exactly one trailing CR/LF (or CRLF); keep every other byte, including interior and
+        /// leading/trailing spaces. The stored bytes are the user's UTF-8, so remote-audit (UTF-8 decode) gets them back
+        /// byte-exact. Refuse an empty (incl. BOM-only), whitespace-only, multi-line or NUL-containing secret; cap at 1024 bytes.</summary>
+        static byte[] ReadStdinSecret(out string error)
+        {
+            error = null; byte[] raw;
+            using (System.IO.Stream stdin = Console.OpenStandardInput())
+            using (System.IO.MemoryStream ms = new System.IO.MemoryStream())
+            { byte[] buf = new byte[4096]; int n; while ((n = stdin.Read(buf, 0, buf.Length)) > 0) { ms.Write(buf, 0, n); if (ms.Length > 262144) break; } raw = ms.ToArray(); }
+            int start = 0, end = raw.Length;
+            if (end - start >= 3 && raw[start] == 0xEF && raw[start + 1] == 0xBB && raw[start + 2] == 0xBF) start += 3;   // one UTF-8 BOM
+            if (end > start && raw[end - 1] == 0x0A) { end--; if (end > start && raw[end - 1] == 0x0D) end--; }           // one trailing LF or CRLF
+            else if (end > start && raw[end - 1] == 0x0D) end--;                                                          // or a lone CR
+            int len = end - start;
+            if (len <= 0) { error = "the secret on standard input is empty"; Array.Clear(raw, 0, raw.Length); return null; }
+            if (len > 1024) { error = "the secret on standard input is longer than 1024 bytes"; Array.Clear(raw, 0, raw.Length); return null; }
+            byte[] secret = new byte[len]; Array.Copy(raw, start, secret, 0, len); Array.Clear(raw, 0, raw.Length);
+            bool allWs = true;
+            foreach (byte b in secret)
+            {
+                if (b == 0) { error = "the secret contains a NUL byte"; Array.Clear(secret, 0, secret.Length); return null; }
+                if (b == 0x0A || b == 0x0D) { error = "the secret must be a single line (more than one line was piped in)"; Array.Clear(secret, 0, secret.Length); return null; }
+                if (b != 0x20 && b != 0x09) allWs = false;
+            }
+            if (allWs) { error = "the secret is only whitespace"; Array.Clear(secret, 0, secret.Length); return null; }
+            return secret;
         }
         static bool CredsValidLabel(string s) { if (s == null || s.Length == 0 || s.Length > 64) return false; foreach (char c in s) if (!(char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '-')) return false; return true; }
         static bool CredsValidUser(string s) { if (s == null || s.Length == 0 || s.Length > 256) return false; foreach (char c in s) if (c < ' ') return false; return true; }

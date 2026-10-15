@@ -21,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_, RemoteInject_, CredsCli_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_, RemoteInject_, CredsCli_, CredsStdin_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -1352,12 +1352,14 @@ namespace PSTools
 
         // ── the "creds" CLI: writes creds.ptv; the secret only enters via stdin or an env var, never argv, never plaintext on disk ──
         static string CredsCli(string exe, string args, string stdinLine, string envName, string envVal, out int exit)
+        { return CredsCliBytes(exe, args, stdinLine == null ? null : Encoding.UTF8.GetBytes(stdinLine + "\n"), envName, envVal, out exit); }
+        static string CredsCliBytes(string exe, string args, byte[] stdin, string envName, string envVal, out int exit)
         {
             ProcessStartInfo psi = new ProcessStartInfo(exe, args); psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.RedirectStandardInput = true; psi.CreateNoWindow = true;
             if (envName != null) psi.EnvironmentVariables[envName] = envVal;
             using (Process p = Process.Start(psi))
             {
-                try { if (stdinLine != null) p.StandardInput.WriteLine(stdinLine); } catch { }
+                try { if (stdin != null) { p.StandardInput.BaseStream.Write(stdin, 0, stdin.Length); p.StandardInput.BaseStream.Flush(); } } catch { }
                 try { p.StandardInput.Close(); } catch { }
                 string so = p.StandardOutput.ReadToEnd(), se = p.StandardError.ReadToEnd(); p.WaitForExit(60000); exit = p.ExitCode; return so + "\n" + se;
             }
@@ -1413,8 +1415,8 @@ namespace PSTools
                 Check(help.IndexOf("--secret-stdin") >= 0 && help.IndexOf("--secret-env") >= 0 && help.IndexOf("--password") < 0 && help.IndexOf("--secret <") < 0, "creds: the only secret inputs are --secret-stdin and --secret-env; no option takes the secret as a value");
 
                 // fuzz / fail-closed
-                int xe1; string oe1 = CredsCli(exe, "creds add " + q + " --label e1 --user u1 --secret-stdin", "", null, null, out xe1);
-                Check(xe1 != 0 && oe1.IndexOf("no secret") >= 0, "creds fuzz: an empty stdin secret is refused, nothing stored");
+                int xe1; string oe1 = CredsCliBytes(exe, "creds add " + q + " --label e1 --user u1 --secret-stdin", new byte[0], null, null, out xe1);
+                Check(xe1 != 0 && oe1.IndexOf("empty") >= 0, "creds fuzz: an empty stdin secret is refused, nothing stored");
                 int xe2; CredsCli(exe, "creds add " + q + " --label e2 --user u2 --secret-env PTV_MISSING_" + Guid.NewGuid().ToString("N"), null, null, null, out xe2);
                 Check(xe2 != 0, "creds fuzz: a missing env var is refused");
                 int xe3; CredsCli(exe, "creds add " + q + " --label \"a&b|c\" --user u3 --secret-env PTV_TSEC", null, "PTV_TSEC", S2, out xe3);
@@ -1433,6 +1435,58 @@ namespace PSTools
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
+
+        // ── PT-69: the --secret-stdin secret is read byte-exact (no console code page, no BOM), one trailing newline stripped ──
+        static void CredsStdin_()
+        {
+            string exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCli.exe");
+            if (!File.Exists(exe)) { Check(false, "creds stdin: PowerTowerCli.exe not found"); return; }
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-c69-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                Engagement eng = EngagementTool.New(dir, "ENG-69", "Acme", "ops", new string[] { "10.0.0.0/24" }, DateTime.UtcNow.AddDays(-1), DateTime.UtcNow.AddDays(1), null, 60, "", 2048);
+                string jf = Path.Combine(dir, "engagement.json"), cp = Path.Combine(dir, "creds.ptv"), q = "\"" + jf + "\"";
+                byte[] BOM = new byte[] { 0xEF, 0xBB, 0xBF };
+
+                // each case: the expected secret string, and the exact bytes piped to stdin (content + optional BOM/newline)
+                string[] names = { "ascii", "accents", "emoji", "spaces", "crlf", "lf", "bom", "tab-inside" };
+                string[] expect = { "plainsecret", "p\u00e4ssw\u00f6rd \u2603", "\U0001F511key-\u00e9", "  spaced pw  ", "crlf-pw", "lf-pw", "bom-pw", "a\tb c" };
+                int ok = 0;
+                for (int i = 0; i < names.Length; i++)
+                {
+                    byte[] body = Encoding.UTF8.GetBytes(expect[i]);
+                    System.IO.MemoryStream ms = new System.IO.MemoryStream();
+                    if (names[i] == "bom") ms.Write(BOM, 0, 3);
+                    ms.Write(body, 0, body.Length);
+                    if (names[i] == "crlf") { ms.WriteByte(0x0D); ms.WriteByte(0x0A); } else { ms.WriteByte(0x0A); }   // lf for all but crlf; 'lf' is explicit lf
+                    int xa; string oa = CredsCliBytes(exe, "creds add " + q + " --label s --user CORP\\u --secret-stdin", ms.ToArray(), null, null, out xa);
+                    // load back and compare the stored bytes to the expected UTF-8, byte-exact
+                    List<CredEntry> entries = CredStore.Load(cp, null, eng.Id); byte[] stored = null; foreach (CredEntry ce in entries) if (ce.Label == "s") stored = ce.Secret;
+                    bool exact = stored != null && SameBytes2(stored, body);
+                    bool notInFile = IndexOf(File.ReadAllBytes(cp), body) < 0 && oa.IndexOf(expect[i]) < 0;
+                    // and it round-trips through remote-audit's resolver to the transport
+                    FakeTransport ft = new FakeTransport(); List<CredEntry> ld = CredStore.Load(cp, null, eng.Id);
+                    Func<TargetSpec, ITransport> mk = delegate (TargetSpec ts) { return ft; };
+                    Func<string, NetworkCred> res = delegate (string lbl) { foreach (CredEntry ce in ld) if (ce.Label == lbl) return new NetworkCred(ce.User, (byte[])ce.Secret.Clone()); return null; };
+                    RemoteAudit ctl = new RemoteAudit(eng, new RunJournal(Path.Combine(dir, "j.ndjson")), mk, res, DateTime.UtcNow);
+                    TargetSpec tg = new TargetSpec(); tg.Host = "10.0.0.10"; tg.CredLabel = "s"; tg.TimeoutSec = 5;
+                    RunResult rr = ctl.RunOne(tg, new RunOptions());
+                    bool resolves = rr.Status == "ok" && ft.LastSecretSeen == expect[i];
+                    foreach (CredEntry ce in ld) ce.Zero(); foreach (CredEntry ce in entries) ce.Zero();
+                    if (xa == 0 && exact && notInFile && resolves) ok++; else Info("creds stdin FAIL '" + names[i] + "': exit " + xa + " exact " + exact + " notInFile " + notInFile + " resolves " + resolves);
+                }
+                Check(ok == names.Length, "creds stdin: all " + names.Length + " cases (ascii, accents, emoji, leading/trailing spaces, CRLF, LF, BOM, interior tab) round-trip byte-exact to the resolver (" + ok + ")");
+
+                // a BOM-only line is refused as empty; a whitespace-only secret is refused
+                int xb; string ob = CredsCliBytes(exe, "creds add " + q + " --label z --user u --secret-stdin", new byte[] { 0xEF, 0xBB, 0xBF, 0x0A }, null, null, out xb);
+                int xw; CredsCliBytes(exe, "creds add " + q + " --label z --user u --secret-stdin", Encoding.UTF8.GetBytes("    \n"), null, null, out xw);
+                int xm; CredsCliBytes(exe, "creds add " + q + " --label z --user u --secret-stdin", Encoding.UTF8.GetBytes("line1\nline2\n"), null, null, out xm);
+                List<CredEntry> fin = CredStore.Load(cp, null, eng.Id); bool noZ = true; foreach (CredEntry ce in fin) if (ce.Label == "z") noZ = false;
+                Check(xb != 0 && ob.IndexOf("empty") >= 0 && xw != 0 && xm != 0 && noZ, "creds stdin: a BOM-only, whitespace-only or multi-line secret is refused, nothing stored (" + xb + "/" + xw + "/" + xm + ")");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        static bool SameBytes2(byte[] a, byte[] b) { if (a.Length != b.Length) return false; for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false; return true; }
         static void Secrets_()
         {
             string dir = Path.Combine(Path.GetTempPath(), "pstools-sec-" + Guid.NewGuid().ToString("N"));
