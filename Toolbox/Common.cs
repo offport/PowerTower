@@ -35,7 +35,7 @@ namespace PSTools
         /// <summary>Save a report: pick the file, write it through the callback (fmt, path), toast, offer to open it. Formats: md, json, pdf.</summary>
         public static void SaveReport(Shell host, Control owner, string what, string stem, string fmt, Action<string, string> write)
         {
-            string filter = fmt == "md" ? "Markdown (*.md)|*.md" : fmt == "json" ? "JSON (*.json)|*.json" : "PDF (*.pdf)|*.pdf";
+            string filter = fmt == "md" ? "Markdown (*.md)|*.md" : fmt == "json" ? "JSON (*.json)|*.json" : fmt == "csv" ? "CSV (*.csv)|*.csv" : "PDF (*.pdf)|*.pdf";
             using (SaveFileDialog d = new SaveFileDialog())
             {
                 d.Filter = filter + "|All files|*.*"; d.FileName = stem + "." + fmt; d.Title = "Save the " + what + " as " + fmt.ToUpperInvariant();

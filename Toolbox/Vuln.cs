@@ -747,7 +747,9 @@ namespace PSTools
     {
         public bool DoWua = true, DoMsrc = true, DoNvd = true, DoKev = true, DoEpss = true; public int Months = 3, HistoryLimit = 1000; public string NvdApiKey = ""; public FeedCache Cache; public int NvdLimit = int.MaxValue;   // Months: the fewest MSRC releases to check; Run() widens it to the host's patch level (MsrcWindow)
         public OsInfo Os; public RebootInfo Reboot = new RebootInfo(); public readonly List<Hotfix> Hotfixes = new List<Hotfix>(); public readonly List<Software> Software = new List<Software>(); public readonly List<MissingUpdate> Missing = new List<MissingUpdate>(); public readonly List<Finding> Findings = new List<Finding>();
-        public readonly HashSet<string> KnownKbs = new HashSet<string>(); public readonly List<string> Log = new List<string>(), Errors = new List<string>(), Releases = new List<string>(); public Dictionary<string, KevEntry> KevCatalog = new Dictionary<string, KevEntry>();
+        public readonly HashSet<string> KnownKbs = new HashSet<string>(); public readonly List<string> Log = new List<string>(), Errors = new List<string>(), Releases = new List<string>();
+        /// <summary>The feed as-of block and MSRC window the enricher produced, so a report built from this scan has the same coverage honesty (PT-45) as the CLI.</summary>
+        public readonly Dictionary<string, object> AsOf = new Dictionary<string, object>(); public int MsrcWindowUsed; public Dictionary<string, KevEntry> KevCatalog = new Dictionary<string, KevEntry>();
         public event Action<string> Progress; public event Action Phase; public event Action Finished; public volatile bool Cancel; public bool Running; public DateTime StartedAt, FinishedAt; public string Stage = "";
         /// <summary>(step label, state, note) - pending · running · done · failed · skipped - for the progress strip.</summary>
         public event Action<string, string, string> Step; public volatile float Fraction = -1;
@@ -817,7 +819,7 @@ namespace PSTools
                     Done(); if (Cancel) return;
                 }
                 // 2 · feeds + resolve, 3 · enrichment: VulnEnrich (Enrich.cs), the same code `enrich` runs on a connected box from a collected bundle
-                VulnEnrich en = NewEnricher(); en.Run(); KevCatalog = en.KevCatalog; lock (sync) { Releases.Clear(); Releases.AddRange(en.Releases); }
+                VulnEnrich en = NewEnricher(); en.Run(); KevCatalog = en.KevCatalog; MsrcWindowUsed = en.MsrcWindowUsed; lock (sync) { Releases.Clear(); Releases.AddRange(en.Releases); AsOf.Clear(); foreach (KeyValuePair<string, object> kv in en.AsOf) AsOf[kv.Key] = kv.Value; }
                 int openN = 0; foreach (Finding f in Findings) if (f.Open) openN++;
                 Say((Cancel ? "cancelled · " : "done · ") + openN + " open finding(s), " + Findings.Count + " total, in " + Fmt.Secs((DateTime.Now - StartedAt).TotalSeconds));
             }

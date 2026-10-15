@@ -31,7 +31,7 @@ namespace PSTools
     {
         public override string Title { get { return Tools.Title(GetType().Name); } }
         public override string Blurb { get { return Tools.Blurb(GetType().Name); } }
-        readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Button bFind, bMissing, bSoft, bFix, bScan, bCancel, bFeeds, bLog; readonly CheckBox cWua, cMsrc, cNvd, cKev, cEpss; readonly NumericUpDown nMonths; readonly TextBox tKey; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
+        readonly DataView view; readonly SelectionBar sel = new SelectionBar(); readonly Button bFind, bMissing, bSoft, bFix, bScan, bCancel, bFeeds, bLog, bSave; readonly CheckBox cWua, cMsrc, cNvd, cKev, cEpss; readonly NumericUpDown nMonths; readonly TextBox tKey; readonly Label status = Theme.Lbl("", Theme.Dim, Theme.UISmall);
         readonly Stat sOs = new Stat("OS build"), sReboot = new Stat("reboot"), sCrit = new Stat("critical"), sHigh = new Stat("high"), sKev = new Stat("known exploited"), sMissing = new Stat("missing updates"), sSoft = new Stat("software");
         readonly ComboBox cSev, cStatus, cSource; readonly CheckBox cKevOnly; readonly Label lSev, lStatus, lSource;
         string mode = "findings"; VulnScan scan; FeedCache cache; bool settingsLoaded; readonly StepStrip steps = new StepStrip();
@@ -51,8 +51,10 @@ namespace PSTools
             tip.SetToolTip(cKev, "Flag CVEs in CISA's Known Exploited Vulnerabilities catalogue."); tip.SetToolTip(cEpss, "Exploit Prediction Scoring System: how likely each open CVE is to be exploited in the next 30 days.");
             Label lm = Theme.Lbl("months", Theme.Dim, Theme.UI); nMonths = Theme.Num(3, 1, 12, 52); tip.SetToolTip(nMonths, "The fewest monthly MSRC releases to check, newest first. The scan widens this to the host's patch level automatically (up to 36), so a machine that is a year behind is covered without changing it."); Label lk = Theme.Lbl("NVD key", Theme.Dim, Theme.UI); tKey = Theme.Text("", 130); tKey.UseSystemPasswordChar = true; tip.SetToolTip(tKey, "Optional free NVD API key (nvd.nist.gov/developers/request-an-api-key): 50 requests per 30 s instead of 5. Saved in settings.ini next to the exe.");
             bFeeds = Theme.Btn("Feed cache…", false); bFeeds.Click += delegate { FeedsDialog(); }; bLog = Theme.Btn("Log…", false); bLog.Click += delegate { ShowLog(); };
+            bSave = Theme.MenuBtn("Save report", new string[] { "Markdown (.md)", "JSON (.json)", "PDF (.pdf)", "CSV (.csv)" }, delegate (int i) { Save(i == 0 ? "md" : i == 1 ? "json" : i == 2 ? "pdf" : "csv"); }); bSave.Enabled = false;
+            new ToolTip().SetToolTip(bSave, "Save the vulnerability report (all findings, not the filtered view) through the same engine as `PowerTowerCli report`. A partial scan (feeds off or unavailable) is marked NOT ASSESSABLE / INCOMPLETE COVERAGE, never clean.");
             Panel gap = new Panel(); gap.Width = Theme.S(14); gap.Height = 1;
-            foreach (Control c in new Control[] { bFind, bMissing, bSoft, bFix, gap, bScan, bCancel, cWua, cMsrc, cNvd, cKev, cEpss, lm, nMonths, lk, tKey, bFeeds, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
+            foreach (Control c in new Control[] { bFind, bMissing, bSoft, bFix, gap, bScan, bCancel, cWua, cMsrc, cNvd, cKev, cEpss, lm, nMonths, lk, tKey, bSave, bFeeds, bLog, status }) bar.Controls.Add(c); status.Margin = new Padding(Theme.S(10), Theme.S(9), 0, 0);
             // the summary strip
             TableLayoutPanel strip = new TableLayoutPanel(); strip.Dock = DockStyle.Top; strip.Height = Theme.S(76); strip.BackColor = Theme.Panel; strip.Padding = new Padding(Theme.S(10), Theme.S(2), Theme.S(2), Theme.S(6)); strip.ColumnCount = 7; strip.RowCount = 1;
             foreach (Stat s in new Stat[] { sOs, sReboot, sCrit, sHigh, sKev, sMissing, sSoft }) { strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, s == sOs ? 22 : s == sReboot ? 16 : 12.4f)); s.Dock = DockStyle.Fill; strip.Controls.Add(s); }
@@ -147,7 +149,7 @@ namespace PSTools
                 else if (mode == "software") foreach (Software s in scan.SoftwareSnapshot()) items.Add(s);
                 else foreach (Hotfix h in scan.HotfixSnapshot()) items.Add(h);
             }
-            view.SetItems(items, true); Cards();
+            view.SetItems(items, true); Cards(); if (bSave != null) bSave.Enabled = scan != null && scan.FinishedAt != DateTime.MinValue;
         }
         void Cards()
         {
@@ -205,6 +207,21 @@ namespace PSTools
         static void Open(string url) { try { Process.Start(url); } catch { } }
 
         // ── dialogs ──
+        void Save(string fmt)
+        {
+            if (scan == null || scan.FinishedAt == DateTime.MinValue) { Host.Toast("Run the scan first.", true); return; }
+            Brand brand = Brand.Load(Brand.DefaultDir);
+            Dictionary<string, object> r;
+            try { r = VulnReport.Build(ScanBundle.FromScan(scan, Environment.MachineName, DateTime.UtcNow), brand); }
+            catch (BundleException ex) { Host.Error("Save failed", ex.Message); return; }
+            Common.SaveReport(Host, this, "vulnerability report", ReportRender.FileStem(r), fmt, delegate (string f, string path)
+            {
+                if (f == "md") File.WriteAllText(path, ReportRender.Markdown(r), new UTF8Encoding(false));
+                else if (f == "json") File.WriteAllText(path, JsonWrite.Text(r, true), new UTF8Encoding(false));
+                else if (f == "pdf") File.WriteAllBytes(path, ReportRender.Pdf(r, brand));
+                else File.WriteAllText(path, ReportRender.Csv(r), new UTF8Encoding(true));   // formula-safe, same as the CLI
+            });
+        }
         void FeedsDialog()
         {
             if (cache == null) cache = OpenCache();
@@ -268,7 +285,7 @@ namespace PSTools
             s.Software.Add(SW("Git", "2.51.0", "The Git Development Community", "git-scm", "git", 0, "no known CVEs at 2.51.0 (downloaded)")); s.Software.Add(SW("Wireshark 4.4.1 x64", "4.4.1", "The Wireshark developer community", "wireshark", "wireshark", 0, "no known CVEs at 4.4.1 (downloaded)")); s.Software.Add(SW("Microsoft Visual Studio Code (User)", "1.104.0", "Microsoft Corporation", "microsoft", "visual_studio_code", 0, "no known CVEs at 1.104.0 (downloaded)"));
             s.Software.Add(SW("Microsoft 365 Apps for enterprise - en-us", "16.0.19127.20182", "Microsoft Corporation", null, null, -1, "not in the product map")); s.Software.Add(SW("Notion", "4.19.0", "Notion Labs, Inc.", null, null, -1, "not in the product map")); s.Software.Add(SW("Python 3.12.6 (64-bit)", "3.12.6150.0", "Python Software Foundation", null, null, -1, "not in the product map"));
             s.Hotfixes.Add(HF("5065999", "QFE", "Security Update", "KB5065999", "installed", new DateTime(2026, 8, 13))); s.Hotfixes.Add(HF("5064000", "CBS", "servicing package", "Package_for_RollupFix~31bf3856ad364e35~amd64~~26200.5000.1.11", "superseded", null)); s.Hotfixes.Add(HF("5065999", "WU history", "installation", "2026-08 Cumulative Update for Windows 11 Version 25H2 for x64-based Systems (KB5065999)", "succeeded", new DateTime(2026, 8, 13, 9, 12, 0))); s.Hotfixes.Add(HF("2267602", "WU history", "installation", "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602 (Version 1.437.98.0)", "succeeded", DateTime.Today.AddDays(-1)));
-            scan = s; if (mode != "findings") SetMode("findings"); else Reload(); status.Text = "NVD · google:chrome 140.0.7339.80";
+            s.StartedAt = DateTime.Now; s.FinishedAt = DateTime.Now; scan = s; if (mode != "findings") SetMode("findings"); else Reload(); status.Text = "NVD · google:chrome 140.0.7339.80";
             steps.Begin(VulnScan.StepLabels); steps.Set("Inventory", "done", "50 programs · 448 hotfix rows"); steps.Set("Windows Update", "done", "3 offered"); steps.Set("Microsoft CVEs", "done", "4 open · 623 patched"); steps.Set("Third-party (NVD)", "running", null); steps.Fraction = 0.45; steps.Say("NVD · google:chrome 140.0.7339.80 (product 5 of 12)");
         }
         static Finding F(string cve, string sev, double cvss, string status, string src, string product, string installed, string fix, string title, string ev, string rel, bool kev, bool exploited, double? epss)

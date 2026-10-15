@@ -21,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_, RemoteInject_, CredsCli_, CredsStdin_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_, RemoteInject_, CredsCli_, CredsStdin_, VulnGuiReport_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -1487,6 +1487,28 @@ namespace PSTools
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
         static bool SameBytes2(byte[] a, byte[] b) { if (a.Length != b.Length) return false; for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false; return true; }
+
+        // -- GUI vuln report: a finished scan -> ScanBundle.FromScan -> VulnReport.Build is the SAME engine the CLI uses (PT-45/PT-46) --
+        static void VulnGuiReport_()
+        {
+            DateTime pin = new DateTime(2026, 10, 13, 9, 0, 0, DateTimeKind.Utc); Brand brand = new Brand();
+            OsInfo os = new OsInfo(); os.ProductName = "Windows 11 Pro"; os.Major = 10; os.Build = 22621; os.Ubr = 2500; os.Arch = "x64"; os.Host = "FIXTURE";
+            VulnScan s = new VulnScan(); s.Os = os; s.DoWua = false; s.StartedAt = pin.ToLocalTime(); s.FinishedAt = pin.ToLocalTime(); s.MsrcWindowUsed = 1; s.Releases.Add("2026-Oct");
+            Finding fnd = new Finding(); fnd.Cve = "CVE-2026-1003"; fnd.Title = "7-Zip privilege escalation"; fnd.Severity = "Critical"; fnd.Source = "NVD"; fnd.Product = "=HYPERLINK(\"http://evil\") 7-Zip"; fnd.Installed = "21.07"; fnd.Fix = "upgrade to 24.09"; fnd.Status = "vulnerable"; fnd.Evidence = "installed 21.07"; fnd.Cvss = 9.8; fnd.Kev = true; s.Findings.Add(fnd);
+            s.AsOf["enrichedUtc"] = pin; s.AsOf["msrc"] = new Dictionary<string, object>(); s.AsOf["nvd"] = new Dictionary<string, object>(); s.AsOf["kev"] = new Dictionary<string, object>(); s.AsOf["epss"] = new Dictionary<string, object>();
+            Dictionary<string, object> r = VulnReport.Build(ScanBundle.FromScan(s, "FIXTURE", pin), brand);
+            int errs = Ptreport.Validate(r).Count;
+            string md = ReportRender.Markdown(r), csv = ReportRender.Csv(r), json = JsonWrite.Text(r, true); byte[] pdf = ReportRender.Pdf(r, brand);
+            bool renders = errs == 0 && md.StartsWith("# ") && pdf.Length > 2000 && Encoding.GetEncoding(1252).GetString(pdf).StartsWith("%PDF-1.4") && Json.GetS(r, "report") == "vulnerability";
+            Check(renders, "vuln gui report: a scan -> ScanBundle.FromScan -> VulnReport.Build validates (" + errs + ") and renders md/json/pdf/csv through the CLI engine");
+            object sum = Json.Get(r, "summary");
+            Check(Json.GetS(sum, "status") == "assessed", "vuln gui report: full feed coverage yields an assessed report (" + Json.GetS(sum, "status") + ")");
+            bool csvSafe = csv.IndexOf("'=HYPERLINK") >= 0 && !System.Text.RegularExpressions.Regex.IsMatch(csv, "(^|,)\"?=HYPERLINK", System.Text.RegularExpressions.RegexOptions.Multiline);
+            Check(csvSafe && md.IndexOf("\n=HYPERLINK") < 0, "vuln gui report: a hostile product name is formula-safe in CSV and inert in Markdown (PT-46)");
+            VulnScan e = new VulnScan(); e.Os = os; e.DoWua = false; e.StartedAt = pin.ToLocalTime(); e.FinishedAt = pin.ToLocalTime();
+            Dictionary<string, object> re = VulnReport.Build(ScanBundle.FromScan(e, "FIXTURE", pin), brand); object su = Json.Get(re, "summary");
+            Check(Json.GetS(su, "status") == "not-assessable" && (Json.GetS(su, "headline") ?? "").IndexOf("No open vulnerabilities") < 0, "vuln gui report: a scan with no feeds is NOT ASSESSABLE, never clean (PT-45): " + Json.GetS(su, "status"));
+        }
         static void Secrets_()
         {
             string dir = Path.Combine(Path.GetTempPath(), "pstools-sec-" + Guid.NewGuid().ToString("N"));

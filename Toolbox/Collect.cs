@@ -361,4 +361,36 @@ namespace PSTools
         public static int Failed(Bundle b) { int n = 0; foreach (object m in b.Modules) { string s = Json.GetS(m, "status"); if (s == "failed" || s == "partial") n++; } return n; }
         public static string Summary(object module) { return (Json.GetS(module, "name") ?? "").PadRight(12) + (Json.GetS(module, "status") ?? "").PadRight(9) + JsonWrite.Int(Json.Get(module, "count"), 0).ToString("N0").PadLeft(7) + " item(s)" + (JsonWrite.Long(Json.Get(module, "durationMs"), 0) / 1000.0).ToString("N1").PadLeft(8) + " s" + (Json.Arr(Json.Get(module, "errors")).Count > 0 ? "   " + string.Join(" | ", JsonWrite.Strings(Json.Get(module, "errors")).ToArray()) : ""); }
     }
+    /// <summary>Builds an in-memory bundle from a finished GUI VulnScan, with the SAME inventory and findings sections
+    /// that `collect` + `enrich` write, so VulnReport.Build + ReportRender produce byte-identical output to the CLI
+    /// `report` for the same data. Time stamps come from the scan (the engine never reads the clock), so reports stay
+    /// reproducible, and the PT-45 coverage verdict falls out of the same asOf/releases/errors the enricher recorded.</summary>
+    public static class ScanBundle
+    {
+        public static Bundle FromScan(VulnScan s, string host, DateTime nowUtc)
+        {
+            if (s == null) throw new BundleException("there is no scan to report on - run the scan first");
+            Bundle b = new Bundle();
+            b.Manifest["host"] = host ?? ""; b.Manifest["runId"] = "scan-" + s.StartedAt.ToString("yyyyMMdd-HHmmss"); b.Manifest["platform"] = "windows"; b.Manifest["mode"] = "live";
+            b.Manifest["domain"] = ""; b.Manifest["privilegeTier"] = "";
+            DateTime fin = s.FinishedAt == DateTime.MinValue ? nowUtc : s.FinishedAt.ToUniversalTime();
+            b.Manifest["startedUtc"] = s.StartedAt == DateTime.MinValue ? nowUtc : s.StartedAt.ToUniversalTime(); b.Manifest["finishedUtc"] = fin;
+            Dictionary<string, object> inv = new Dictionary<string, object>();
+            inv["os"] = Codec.Os(s.Os ?? new OsInfo()); inv["reboot"] = Codec.Reboot(s.Reboot ?? new RebootInfo());
+            inv["software"] = Codec.Many(s.SoftwareSnapshot(), delegate (Software x) { return (object)Codec.Software(x); });
+            inv["hotfixes"] = Codec.Many(s.HotfixSnapshot(), delegate (Hotfix x) { return (object)Codec.Hotfix(x); });
+            inv["missing"] = Codec.Many(s.MissingSnapshot(), delegate (MissingUpdate x) { return (object)Codec.Missing(x); });
+            inv["knownKbs"] = new List<string>(s.KnownKbs);
+            DateTime? newest = VulnScan.NewestUpdateDate(s.HotfixSnapshot()); inv["newestUpdate"] = newest.HasValue ? (object)newest.Value : null;
+            inv["missingStatus"] = s.DoWua ? "searched" : "not searched (offline collection)";
+            b["inventory"] = inv;
+            List<Finding> fs = s.FindingsSnapshot(); int open = 0; foreach (Finding f in fs) if (f.Open) open++;
+            Dictionary<string, object> d = new Dictionary<string, object>();
+            d["open"] = open; d["total"] = fs.Count; d["msrcWindow"] = s.MsrcWindowUsed; d["releases"] = new List<string>(s.Releases); d["errors"] = new List<string>(s.Errors); d["asOf"] = s.AsOf;
+            d["items"] = Codec.Many(fs, delegate (Finding f) { return (object)Codec.Finding(f); });
+            b["findings"] = d;
+            Dictionary<string, object> en = new Dictionary<string, object>(); en["utc"] = s.AsOf.ContainsKey("enrichedUtc") ? s.AsOf["enrichedUtc"] : (object)fin; en["offline"] = s.Cache != null && s.Cache.Offline; en["open"] = open; en["total"] = fs.Count; b.Manifest["enriched"] = en;
+            return b;
+        }
+    }
 }
