@@ -166,10 +166,26 @@ namespace PSTools
             string[] f = s.Split(','); TargetSpec t = new TargetSpec(); t.SourceLine = s;
             t.Host = f[0].Trim();
             if (!ValidHost(t.Host, out error)) return null;
-            if (f.Length > 1) t.CredLabel = f[1].Trim();
-            if (f.Length > 2) { int to; if (int.TryParse(f[2].Trim(), out to) && to > 0 && to <= 86400) t.TimeoutSec = to; }
-            if (f.Length > 3) foreach (string m in f[3].Split(';', ' ')) { string mm = m.Trim(); if (mm.Length > 0) t.Modules.Add(mm); }
+            if (f.Length > 1) { t.CredLabel = f[1].Trim(); foreach (char c in t.CredLabel) if (!(char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '-')) { error = "the credential label has an illegal character '" + c + "'"; return null; } }
+            if (f.Length > 2) { int to; if (int.TryParse(f[2].Trim(), out to) && to > 0 && to <= 86400) t.TimeoutSec = to; else if (f[2].Trim().Length > 0) { error = "the timeout must be a whole number of seconds (1-86400)"; return null; } }
+            if (f.Length > 3) { List<string> canon; if (!ValidModules(f[3].Split(';', ' '), out canon, out error)) return null; t.Modules = canon; }   // PT-67: modules are allow-listed; a line with any other value is refused whole
             return t;
+        }
+        /// <summary>PT-67: a module must be an exact (case-insensitive) name from Collector.AllModules and nothing else -
+        /// no metacharacter, quote, space trick or unknown word survives. Returns the lower-case canonical set; on any
+        /// other value it fails and names it, so the caller rejects the whole target line.</summary>
+        public static bool ValidModules(System.Collections.Generic.IEnumerable<string> mods, out List<string> canonical, out string why)
+        {
+            canonical = new List<string>(); why = null;
+            foreach (string m in mods)
+            {
+                string raw = (m ?? "").Trim(); if (raw.Length == 0) continue;
+                string lo = raw.ToLowerInvariant(); bool charsOk = lo.Length > 0; foreach (char c in lo) if (c < 'a' || c > 'z') charsOk = false;
+                bool known = false; if (charsOk) foreach (string k in Collector.AllModules) if (lo == k) { known = true; break; }
+                if (!known) { why = "'" + raw + "' is not a known module - allowed: " + string.Join(", ", Collector.AllModules); return false; }
+                if (!canonical.Contains(lo)) canonical.Add(lo);
+            }
+            return true;
         }
         static readonly string Banned = "\\/*?\"<>|%$@ \t&;!`'(){}[]^";   // ':' is NOT here: it is legal in an IPv6 literal (validated below) and rejected in a hostname label by the letter/digit check
         /// <summary>Accept a hostname, FQDN or IPv4/IPv6 literal; reject everything a transport or shell could misread.</summary>
@@ -195,7 +211,7 @@ namespace PSTools
     {
         public bool Smb445 = true, Rpc135 = true, WinRm5985 = false; public bool PreflightThrows;
         public string ConnectThrowCode;                 // LOGON_FAILURE / TOKEN_FILTER / ADMIN_SHARE / PORT_DOWN / null
-        public bool ExeVanishes, Hangs, Reboot, BadHash, PartialModule, DeleteFails, StageThrows, NoBundle, BadDoneJson;
+        public bool ExeVanishes, Hangs, Reboot, BadHash, PartialModule, DeleteFails, StageThrows, NoBundle, BadDoneJson, ConnectThrowMessageWithSecret;
         public int ExitCode; public byte[] Bundle = Encoding.UTF8.GetBytes("PTB0fake-bundle-bytes");
         public int ConnectCalls, LogonAttempts, ExecCalls, WaitCalls, DeleteCalls, FetchCalls, CopyCalls;
         public string LastSecretSeen;
@@ -207,6 +223,7 @@ namespace PSTools
         {
             ConnectCalls++; LogonAttempts++;
             if (cred != null) LastSecretSeen = cred.SecretUtf8();   // a real transport reads the secret here, at connect time
+            if (ConnectThrowMessageWithSecret) throw new TransportException(PtStage.Connect, "CONNECT", "logon failed for " + host + " as " + cred.User + " with password " + cred.SecretUtf8());
             if (ConnectThrowCode == "LOGON_FAILURE") throw new TransportException(PtStage.Connect, "LOGON_FAILURE", "logon failed");
             if (ConnectThrowCode == "TOKEN_FILTER") throw new TransportException(PtStage.Connect, "TOKEN_FILTER", "ADMIN$ denied after logon");
             if (ConnectThrowCode == "ADMIN_SHARE") throw new TransportException(PtStage.Connect, "ADMIN_SHARE", "ADMIN$ missing");

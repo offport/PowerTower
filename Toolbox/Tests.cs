@@ -21,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_, RemoteInject_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -1295,6 +1295,59 @@ namespace PSTools
             foreach (string c in new string[] { "RemoteAudit.cs", "RemoteAuditSupport.cs" }) if (tst.IndexOf(c) < 0) inTst = false;
             Check(missing.Count == 0 && inGui && inCli && inTst && outCol && gui.Length > 0 && col.Length > 0,
                 "build: build.cmd lists exist on disk and the controller is on the GUI/CLI/Tests lines but NOT the collector line (PT-57) - missing " + missing.Count + ", gui " + inGui + ", cli " + inCli + ", tests " + inTst + ", not-in-collector " + outCol);
+        }
+
+        // ── PT-67: no injection through the target file reaches the remote command line ──
+        static void RemoteInject_()
+        {
+            // the exact FUZZ payload, plus a corpus of cmd metacharacter / quote / whitespace injections in the modules field
+            string[] badModules = {
+                "inventory&echo;PT_INJECTED>marker.txt", "inventory&calc", "inventory|whoami", "inventory>out", "inventory<in",
+                "inventory^x", "inventory\"q", "inventory'q", "inventory`id`", "inventory$(id)", "inventory%COMSPEC%",
+                "inventory;net", "inventory ()", "inventory!x!", "../../x", "INVENT ORY", "network\tsecrets", "zzz-unknown", "collect"
+            };
+            int refused = 0; foreach (string m in badModules) { string err; TargetSpec ts = TargetList.Parse("ws01,lab,60," + m, out err); if (ts == null && err != null && err != "blank") refused++; }
+            Check(refused == badModules.Length, "inject: all " + badModules.Length + " hostile modules fields refuse the whole target line (" + refused + ")");
+
+            // the specific reproduction line from the verdict
+            string e1; TargetSpec fuzz = TargetList.Parse("ws01,lab,60,inventory&echo;PT_INJECTED>marker.txt", out e1);
+            Check(fuzz == null && e1 != null && e1.IndexOf("not a known module") >= 0, "inject: the FUZZ payload line is refused with a clear reason (" + (e1 ?? "accepted!") + ")");
+
+            // valid module fields still parse to the canonical allow-listed set
+            string e2; TargetSpec okT = TargetList.Parse("ws01,lab,60,inventory;network RECON", out e2);
+            Check(okT != null && okT.Modules.Count == 3 && okT.Modules.Contains("inventory") && okT.Modules.Contains("network") && okT.Modules.Contains("recon"), "inject: a valid modules field parses to the canonical lower-case allow-listed set");
+
+            // hostile host and credential-label fields are refused too
+            string e3, e4; TargetList.Parse("ws01&calc,lab,60,inventory", out e3); TargetList.Parse("ws01,lab;x,60,inventory", out e4);
+            Check(e3 != null && e4 != null, "inject: a hostile host or credential-label field is refused (" + e3 + " / " + e4 + ")");
+
+            // defence in depth: BuildCollectorArgs rejects an unsafe module even if one bypasses Parse, and never emits a metacharacter
+            TargetSpec inj = new TargetSpec(); inj.Host = "ws01"; inj.Modules.Add("inventory&echo"); string thrown = "";
+            try { RemoteAudit.BuildCollectorArgs(inj, "r1", true, false, 60); } catch (BundleException ex) { thrown = ex.Message; }
+            Check(thrown.Length > 0, "inject: BuildCollectorArgs refuses an unsafe module token that bypassed Parse (" + thrown + ")");
+            TargetSpec inj2 = new TargetSpec(); inj2.Host = "ws01"; string thrown2 = "";
+            try { RemoteAudit.BuildCollectorArgs(inj2, "r1 & calc", true, false, 60); } catch (BundleException ex) { thrown2 = ex.Message; }
+            Check(thrown2.Length > 0, "inject: BuildCollectorArgs refuses a run id with a shell metacharacter");
+
+            // a valid command line contains no shell metacharacter at all
+            TargetSpec good = new TargetSpec(); good.Host = "ws01"; good.Modules.Add("inventory"); good.Modules.Add("network");
+            string args = RemoteAudit.BuildCollectorArgs(good, "20261015-120000-abc123", true, true, 120);
+            bool clean = true; foreach (char c in "&|<>^;`$()!%\"'\n\r\t") if (args.IndexOf(c) >= 0) clean = false;
+            Check(clean && args.IndexOf("--modules inventory,network") >= 0, "inject: the built command line for valid input has no shell metacharacter and only allow-listed modules");
+
+            // PT-61: a transport exception carrying the password is scrubbed in the result detail and the journal
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-ph3i-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                Engagement e = Ph3Eng(); string jp = Path.Combine(dir, "j.ndjson");
+                Func<TargetSpec, ITransport> make = delegate (TargetSpec ts) { FakeTransport ft = new FakeTransport(); ft.ConnectThrowMessageWithSecret = true; return ft; };
+                Func<string, NetworkCred> resolve = delegate (string label) { return new NetworkCred(ACCOUNT, Encoding.UTF8.GetBytes(SECRET)); };
+                RemoteAudit ctl = new RemoteAudit(e, new RunJournal(jp), make, resolve, DateTime.UtcNow);
+                RunResult r = ctl.RunOne(Ph3Target("10.0.0.10"), new RunOptions());
+                string journalText = File.Exists(jp) ? File.ReadAllText(jp) : "";
+                Check((r.Detail ?? "").IndexOf(SECRET) < 0 && journalText.IndexOf(SECRET) < 0 && (r.Detail ?? "").IndexOf("***") >= 0, "inject (PT-61): a transport exception that echoes the password is scrubbed in the detail and the journal");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
         }
         static void Secrets_()
         {

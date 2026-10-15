@@ -48,7 +48,7 @@ namespace PSTools
                 throw new TransportException(PtStage.Connect, "TOKEN_FILTER", "ADMIN$ access denied after logon (rc=5)");
             if (rc != 0) throw new TransportException(PtStage.Connect, "CONNECT", "WNetAddConnection2 rc=" + rc);
             stageUnc = connectedUnc + "\\Temp\\" + stageDirName;
-            stageLocal = "%SystemRoot%\\Temp\\" + stageDirName;   // the path as the remote process sees it
+            stageLocal = ResolveWindowsDir() + "\\Temp\\" + stageDirName;   // a concrete path: CreateProcess does not expand %SystemRoot%
             try { Directory.CreateDirectory(stageUnc); }
             catch (UnauthorizedAccessException) { throw new TransportException(PtStage.Connect, "TOKEN_FILTER", "cannot create the staging dir under ADMIN$ - filtered token (UAC remote restriction)"); }
             catch (Exception ex) { throw new TransportException(PtStage.Stage, "STAGE", ex.Message); }
@@ -62,18 +62,20 @@ namespace PSTools
 
         public int Exec(string remoteExeName, string args)
         {
-            // run the staged exe in its own dir; redirect streams to files we can fetch, so nothing goes to a console
-            string cmd = "cmd.exe /c \"cd /d \"" + stageLocal + "\" && \"" + stageLocal + "\\" + remoteExeName + "\" " + args + " > \"" + stageLocal + "\\stdout.txt\" 2> \"" + stageLocal + "\\stderr.txt\"\"";
+            // PT-67: no cmd.exe. Win32_Process.Create runs this through CreateProcess, so & | > ^ etc. are literal
+            // arguments, not shell operators - a malicious value in args cannot start a second command. The collector
+            // writes bundle.ptb + done.json into its working dir (CurrentDirectory below); we fetch those, not a console log.
+            string cmd = "\"" + stageLocal + "\\" + remoteExeName + "\" " + args;
             try
             {
                 ManagementScope scope = WmiScope();
                 using (ManagementClass pc = new ManagementClass(scope, new ManagementPath("Win32_Process"), null))
                 {
                     ManagementBaseObject inParams = pc.GetMethodParameters("Create");
-                    inParams["CommandLine"] = cmd; inParams["CurrentDirectory"] = null;
+                    inParams["CommandLine"] = cmd; inParams["CurrentDirectory"] = stageLocal;   // relative --out bundle.ptb resolves in the staged dir
                     ManagementBaseObject outParams = pc.InvokeMethod("Create", inParams, null);
                     uint rc = (uint)outParams["ReturnValue"];
-                    if (rc != 0) throw new TransportException(PtStage.Exec, rc == 2 ? "EXE_GONE" : "EXEC", "Win32_Process.Create returned " + rc);
+                    if (rc != 0) throw new TransportException(PtStage.Exec, rc == 9 ? "EXE_GONE" : "EXEC", "Win32_Process.Create returned " + rc);   // 9 = path not found (the staged exe was removed/quarantined)
                     return Convert.ToInt32(outParams["ProcessId"]);
                 }
             }
@@ -142,6 +144,13 @@ namespace PSTools
         {
             try { if (connectedUnc != null) WNetCancelConnection2(connectedUnc, 0, true); } catch { }
             connectedUnc = null;
+        }
+        /// <summary>The target's Windows directory (ADMIN$ maps to it), queried over WMI; falls back to C:\\Windows. Used so
+        /// the direct CommandLine carries a concrete path rather than %SystemRoot%, which CreateProcess would not expand.</summary>
+        string ResolveWindowsDir()
+        {
+            try { using (ManagementObjectSearcher s = new ManagementObjectSearcher(WmiScope(), new ObjectQuery("SELECT WindowsDirectory FROM Win32_OperatingSystem"))) using (ManagementObjectCollection c = s.Get()) foreach (ManagementObject o in c) { string w = o["WindowsDirectory"] as string; o.Dispose(); if (!string.IsNullOrEmpty(w)) return w.TrimEnd('\\'); } } catch { }
+            return "C:\\Windows";
         }
         ManagementScope WmiScope()
         {

@@ -176,7 +176,7 @@ namespace PSTools
                         case "TOKEN_FILTER": return Done(r, "token-filter", "logon succeeded but ADMIN$ was denied - the account gets a filtered token over the network (UAC remote restriction / LocalAccountTokenFilterPolicy). Use a domain admin or the built-in Administrator, or the client sets LocalAccountTokenFilterPolicy=1 (a target-side change PowerTower never makes and which should be reverted after the engagement).", started);
                         case "ADMIN_SHARE": return Done(r, "admin-share", "ADMIN$ is not available (AutoShareServer=0, SMB1-only, or a signing mismatch). Stage path cannot be reached.", started);
                         case "PORT_DOWN": return Done(r, "unreachable", "the execution port closed between preflight and connect.", started);
-                        default: return Done(r, "connect-failed", Scrub(ex.Message), started);
+                        default: return Done(r, "connect-failed", Scrub(ex.Message, cred), started);
                     }
                 }
 
@@ -190,7 +190,7 @@ namespace PSTools
                     if (opt.EngagementPublicKey != null) tr.Copy(opt.EngagementPublicKey, "engagement.pub");
                     if (opt.IocList != null) tr.Copy(opt.IocList, "ioc.txt");
                 }
-                catch (TransportException ex) { tr.Close(); return Done(r, "staging-failed", Scrub(ex.Message), started); }
+                catch (TransportException ex) { tr.Close(); return Done(r, "staging-failed", Scrub(ex.Message, cred), started); }
 
                 // 5. execute with a hard timeout; kill on expiry and still try to fetch a partial bundle
                 int timeoutMs = Math.Max(1, (t.TimeoutSec > 0 ? t.TimeoutSec : opt.DefaultTimeoutSec)) * 1000;
@@ -201,7 +201,7 @@ namespace PSTools
                 catch (TransportException ex)
                 {
                     if (ex.Code == "EXE_GONE") { TryClean(tr, r); return Done(r, "exe-blocked", "the staged collector vanished before or during execution - antivirus/EDR quarantined it, or remote process creation was blocked. Allow-list PowerTowerCollect.exe by hash and publisher for this engagement and tell the client SOC the run id " + r.RunId + ".", started); }
-                    TryClean(tr, r); return Done(r, "exec-failed", Scrub(ex.Message), started);
+                    TryClean(tr, r); return Done(r, "exec-failed", Scrub(ex.Message, cred), started);
                 }
                 if (ex2.SessionLost) { return Done(r, "reboot-failed", "the session was lost mid-run (likely a reboot). Marked failed; the controller does not auto-retry. Staged dir pt-" + r.RunId + " may remain - run cleanup --run " + r.RunId + ".", started); }
 
@@ -236,7 +236,7 @@ namespace PSTools
                 r.LeftClean = gone;
                 return Done(r, st, partialRun ? "bundle verified; one or more modules were partial (see the manifest)." : "bundle verified; nothing left on the target." + (gone ? "" : " WARNING: the staged dir could not be removed - run cleanup --run " + r.RunId + "."), started, bundle);
             }
-            catch (Exception ex) { return Done(r, "error", Scrub(ex.GetType().Name + ": " + ex.Message), started); }
+            catch (Exception ex) { return Done(r, "error", Scrub(ex.GetType().Name + ": " + ex.Message, cred), started); }
             finally { if (cred != null) cred.Zero(); if (tr != null) try { tr.Close(); } catch { } }
         }
 
@@ -270,7 +270,7 @@ namespace PSTools
                 tr.Delete(); bool gone = !tr.Exists(); r.LeftClean = gone;
                 return Done(r, gone ? "cleaned" : "cleanup-incomplete", "removed pt-" + runId + (swept > 0 ? " and swept " + swept + " stale dir(s)" : "") + (gone ? "" : " - still present"), started);
             }
-            catch (TransportException ex) { return Done(r, "cleanup-failed", Scrub(ex.Message), started); }
+            catch (TransportException ex) { return Done(r, "cleanup-failed", Scrub(ex.Message, cred), started); }
             catch (Exception ex) { return Done(r, "error", Scrub(ex.Message), started); }
             finally { if (cred != null) cred.Zero(); if (tr != null) try { tr.Close(); } catch { } }
         }
@@ -280,20 +280,30 @@ namespace PSTools
         /// Staged names are relative so they resolve in that dir. Every option here is one of CollectOptions.Help.</summary>
         public static string BuildCollectorArgs(TargetSpec t, string runId, bool hasPubKey, bool hasIoc, int budgetSec)
         {
+            // PT-67 defence in depth: re-validate every value that becomes a command-line token, even though Parse already did.
+            List<string> mods; string why; if (!TargetList.ValidModules(t.Modules ?? new List<string>(), out mods, out why)) throw new BundleException("refusing to build the collector command line: " + why);
+            foreach (char c in runId ?? "") if (!(char.IsLetterOrDigit(c) || c == '-' || c == '.')) throw new BundleException("refusing to build the collector command line: the run id has an illegal character");
             List<string> a = new List<string>();
             a.Add("--out"); a.Add("bundle.ptb");
             if (hasPubKey) { a.Add("--pubkey"); a.Add("engagement.pub"); }   // seal to the engagement key; the host cannot read its own bundle
             a.Add("--run-id"); a.Add(runId);
             if (hasIoc) { a.Add("--ioc"); a.Add("ioc.txt"); }
-            if (t.Modules != null && t.Modules.Count > 0) { a.Add("--modules"); a.Add(string.Join(",", t.Modules.ToArray())); }
+            if (mods.Count > 0) { a.Add("--modules"); a.Add(string.Join(",", mods.ToArray())); }   // mods are lower-case [a-z] names from the allow-list
             if (budgetSec > 0) { a.Add("--budget"); a.Add(budgetSec.ToString()); }
-            return string.Join(" ", a.ToArray());   // staged names, run id, modules and budget never contain a space
+            return string.Join(" ", a.ToArray());   // every token is a fixed flag, a staged name, a validated run id, an allow-listed module or an integer - no spaces, no shell metacharacters
         }
         static string NewRunId() { return DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6); }
         static string YN(bool b) { return b ? "yes" : "no"; }
         static string Short(string sha) { return sha == null ? "?" : (sha.Length > 12 ? sha.Substring(0, 12) : sha); }
         public static string Sha256Hex(byte[] b) { using (SHA256 h = SHA256.Create()) { byte[] d = h.ComputeHash(b); StringBuilder sb = new StringBuilder(d.Length * 2); foreach (byte x in d) sb.Append(x.ToString("x2")); return sb.ToString(); } }
         /// <summary>Strip anything that looks like a credential out of a message before it is shown or journaled.</summary>
+        /// <summary>PT-61: also strip the live secret value itself before a message is shown or journaled, in case a
+        /// transport exception echoed the password back.</summary>
+        public static string Scrub(string s, NetworkCred cred)
+        {
+            if (cred != null && !string.IsNullOrEmpty(s)) { string sec = cred.SecretUtf8(); if (sec.Length > 0) s = s.Replace(sec, "***"); }
+            return Scrub(s);
+        }
         public static string Scrub(string s)
         {
             if (string.IsNullOrEmpty(s)) return "";
