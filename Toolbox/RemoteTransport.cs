@@ -63,7 +63,7 @@ namespace PSTools
         public int Exec(string remoteExeName, string args)
         {
             // run the staged exe in its own dir; redirect streams to files we can fetch, so nothing goes to a console
-            string cmd = "cmd.exe /c \"cd /d \"" + stageLocal + "\" && \"" + stageLocal + "\\" + remoteExeName + "\" " + args + " --out \"" + stageLocal + "\\bundle.ptb\" > \"" + stageLocal + "\\stdout.txt\" 2> \"" + stageLocal + "\\stderr.txt\"\"";
+            string cmd = "cmd.exe /c \"cd /d \"" + stageLocal + "\" && \"" + stageLocal + "\\" + remoteExeName + "\" " + args + " > \"" + stageLocal + "\\stdout.txt\" 2> \"" + stageLocal + "\\stderr.txt\"\"";
             try
             {
                 ManagementScope scope = WmiScope();
@@ -106,8 +106,10 @@ namespace PSTools
         }
         void Terminate(ManagementScope scope, int pid)
         {
-            using (ManagementObjectSearcher s = new ManagementObjectSearcher(scope, new ObjectQuery("SELECT * FROM Win32_Process WHERE ProcessId=" + pid)))
-            using (ManagementObjectCollection c = s.Get()) foreach (ManagementObject o in c) { o.InvokeMethod("Terminate", new object[] { (uint)1 }); o.Dispose(); }
+            // PT-65: kill the children first (the collector is a child of the cmd.exe we started), then the process itself
+            try { using (ManagementObjectSearcher s = new ManagementObjectSearcher(scope, new ObjectQuery("SELECT ProcessId FROM Win32_Process WHERE ParentProcessId=" + pid))) using (ManagementObjectCollection cc = s.Get()) foreach (ManagementObject ch in cc) { int cp = Convert.ToInt32(ch["ProcessId"]); ch.Dispose(); if (cp != pid) Terminate(scope, cp); } } catch { }
+            using (ManagementObjectSearcher s2 = new ManagementObjectSearcher(scope, new ObjectQuery("SELECT * FROM Win32_Process WHERE ProcessId=" + pid)))
+            using (ManagementObjectCollection c2 = s2.Get()) foreach (ManagementObject o in c2) { try { o.InvokeMethod("Terminate", new object[] { (uint)1 }); } catch { } o.Dispose(); }
         }
 
         public byte[] Fetch(string remoteName)

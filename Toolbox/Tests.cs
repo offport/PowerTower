@@ -21,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_, RemoteBatch_, RemoteCollectorArgs_, BuildLists_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -1212,6 +1212,89 @@ namespace PSTools
                 Check(rb.Status == "ok" && rb.Verified && rb.Bytes == big.Bundle.Length, "remote fuzz: a 2 MB bundle verifies and round-trips its byte count");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── PT-59: the one-attempt rule is per credential across a whole batch, not per target ──
+        static void RemoteBatch_()
+        {
+            Engagement e = Ph3Eng(); string dir = Path.Combine(Path.GetTempPath(), "pstools-ph3b-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                List<FakeTransport> made = new List<FakeTransport>();
+                Func<TargetSpec, ITransport> make = delegate (TargetSpec ts) { FakeTransport ft = new FakeTransport(); ft.ConnectThrowCode = "LOGON_FAILURE"; made.Add(ft); return ft; };
+                Func<string, NetworkCred> resolve = delegate (string label) { return new NetworkCred(ACCOUNT, Encoding.UTF8.GetBytes(SECRET)); };
+                RemoteAudit ctl = new RemoteAudit(e, new RunJournal(Path.Combine(dir, "j.ndjson")), make, resolve, DateTime.UtcNow);
+                List<TargetSpec> targets = new List<TargetSpec>();
+                for (int i = 11; i <= 16; i++) { TargetSpec ts = new TargetSpec(); ts.Host = "10.0.0." + i; ts.CredLabel = "lab"; ts.TimeoutSec = 5; targets.Add(ts); }
+                RunOptions opt = new RunOptions(); opt.CollectorExe = Encoding.UTF8.GetBytes("MZ");
+                List<RunResult> rs = ctl.RunBatch(targets, opt);
+                int logonFailed = 0, skipped = 0, totalLogonAttempts = 0; foreach (FakeTransport ft in made) totalLogonAttempts += ft.LogonAttempts;
+                foreach (RunResult r in rs) { if (r.Status == "logon-failed") logonFailed++; else if (r.Status == "skipped-locked-credential") skipped++; }
+                Check(rs.Count == 6 && logonFailed == 1 && skipped == 5 && made.Count == 1 && totalLogonAttempts == 1,
+                    "remote: BATCH-STOPS-AFTER-FIRST-LOGON-FAILURE - 6 targets on one credential make exactly ONE logon attempt; the other 5 are skipped before any logon (attempts " + totalLogonAttempts + ", transports " + made.Count + ", skipped " + skipped + ")");
+                // a different credential in the same batch is NOT blocked by the first one's failure
+                made.Clear(); TargetSpec other = new TargetSpec(); other.Host = "10.0.0.20"; other.CredLabel = "other"; other.TimeoutSec = 5;
+                Func<string, NetworkCred> resolve2 = delegate (string label) { return new NetworkCred(label == "other" ? "LAB\\other" : ACCOUNT, Encoding.UTF8.GetBytes(SECRET)); };
+                RemoteAudit ctl2 = new RemoteAudit(e, new RunJournal(Path.Combine(dir, "j2.ndjson")), make, resolve2, DateTime.UtcNow);
+                List<TargetSpec> t2 = new List<TargetSpec>(targets); t2.Add(other);
+                List<RunResult> rs2 = ctl2.RunBatch(t2, opt);
+                int attempts2 = 0; foreach (FakeTransport ft in made) attempts2 += ft.LogonAttempts;
+                Check(attempts2 == 2, "remote: a second, different credential in the same batch still gets its own one attempt (attempts " + attempts2 + ")");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── PT-58: the exact command line the controller sends must produce a bundle from the REAL collector exe ──
+        static void RemoteCollectorArgs_()
+        {
+            // every option the builder emits must be one the collector actually accepts
+            TargetSpec t = new TargetSpec(); t.Host = "10.0.0.10"; t.Modules.Add("inventory");
+            string args = RemoteAudit.BuildCollectorArgs(t, "testrun-01", true, true, 120);
+            HashSet<string> known = new HashSet<string>(); foreach (string[] h in CollectOptions.Help) known.Add(h[0]);
+            bool allKnown = true; string unknownOpt = ""; foreach (string tok in args.Split(' ')) if (tok.StartsWith("--")) { string name = tok.Substring(2); if (!known.Contains(name)) { allKnown = false; unknownOpt = name; } }
+            Check(allKnown && args.IndexOf("--out bundle.ptb") >= 0 && args.IndexOf("--pubkey engagement.pub") >= 0 && args.IndexOf("collect ") < 0 && !args.StartsWith("collect"),
+                "remote: the collector command line uses only real options (no 'collect' verb)" + (allKnown ? "" : " - UNKNOWN --" + unknownOpt));
+
+            // run the exact arguments against the real PowerTowerCollect.exe, in a staged dir, and get a sealed bundle + done.json
+            string exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PowerTowerCollect.exe");
+            if (!File.Exists(exe)) { Check(false, "remote: PowerTowerCollect.exe not found next to Tests.exe"); return; }
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-ph3c-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                using (System.Security.Cryptography.RSACryptoServiceProvider rsa = new System.Security.Cryptography.RSACryptoServiceProvider(2048))
+                    File.WriteAllText(Path.Combine(dir, "engagement.pub"), rsa.ToXmlString(false), new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(dir, "ioc.txt"), "evil.example\n10.0.0.9\n", new UTF8Encoding(false));
+                TargetSpec rt = new TargetSpec(); rt.Host = Environment.MachineName; rt.Modules.Add("inventory");
+                string cmdArgs = RemoteAudit.BuildCollectorArgs(rt, "testrun-02", true, true, 120);   // relative names resolve in the working dir, like the staged dir on a target
+                System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo(exe, cmdArgs);
+                psi.WorkingDirectory = dir; psi.UseShellExecute = false; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.CreateNoWindow = true;
+                System.Diagnostics.Process p = System.Diagnostics.Process.Start(psi);
+                string so = p.StandardOutput.ReadToEnd(), se = p.StandardError.ReadToEnd(); bool exited = p.WaitForExit(180000); int code = exited ? p.ExitCode : -999; if (!exited) try { p.Kill(); } catch { }
+                string bundle = Path.Combine(dir, "bundle.ptb"), done = Path.Combine(dir, "done.json");
+                bool haveBundle = File.Exists(bundle), haveDone = File.Exists(done); bool shaOk = false;
+                if (haveBundle && haveDone) { try { object d = Json.Parse(File.ReadAllText(done)); string want = Json.GetS(d, "sha256"); shaOk = string.Equals(want, BundleCrypto.FileSha256(bundle), StringComparison.OrdinalIgnoreCase); } catch { } }
+                Check(exited && (code == 0 || code == 1) && haveBundle && haveDone && shaOk,
+                    "remote: the real PowerTowerCollect.exe accepts the controller's command line and writes a verifiable bundle + done.json (exit " + code + ", bundle " + haveBundle + ", done " + haveDone + ", sha " + shaOk + (se.Length > 0 && !haveBundle ? ", stderr: " + se.Substring(0, Math.Min(120, se.Length)).Replace("\n", " ") : "") + ")");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── PT-57: the committed build.cmd must build every exe from a fresh checkout ──
+        static void BuildLists_()
+        {
+            string bc = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "build.cmd");
+            if (!File.Exists(bc)) { Check(false, "build: build.cmd not found next to Tests.exe"); return; }
+            string[] lines = File.ReadAllLines(bc); string gui = "", cli = "", col = "", tst = "";
+            foreach (string ln in lines) { if (ln.IndexOf("/out:PowerTower.exe") >= 0) gui = ln; else if (ln.IndexOf("/out:PowerTowerCli.exe") >= 0) cli = ln; else if (ln.IndexOf("/out:PowerTowerCollect.exe") >= 0) col = ln; else if (ln.IndexOf("/out:Tests.exe") >= 0) tst = ln; }
+            // every .cs named on a line (that is not %SHARED%) exists on disk
+            List<string> missing = new List<string>();
+            foreach (string ln in new string[] { gui, cli, col, tst }) foreach (string tok in ln.Split(' ')) if (tok.EndsWith(".cs")) { if (!File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, tok))) missing.Add(tok); }
+            string[] ctrl = { "RemoteAudit.cs", "RemoteAuditSupport.cs", "RemoteTransport.cs" };
+            bool inGui = true, inCli = true, inTst = true, outCol = true;
+            foreach (string c in ctrl) { if (gui.IndexOf(c) < 0) inGui = false; if (cli.IndexOf(c) < 0) inCli = false; if (col.IndexOf(c) >= 0) outCol = false; }
+            foreach (string c in new string[] { "RemoteAudit.cs", "RemoteAuditSupport.cs" }) if (tst.IndexOf(c) < 0) inTst = false;
+            Check(missing.Count == 0 && inGui && inCli && inTst && outCol && gui.Length > 0 && col.Length > 0,
+                "build: build.cmd lists exist on disk and the controller is on the GUI/CLI/Tests lines but NOT the collector line (PT-57) - missing " + missing.Count + ", gui " + inGui + ", cli " + inCli + ", tests " + inTst + ", not-in-collector " + outCol);
         }
         static void Secrets_()
         {

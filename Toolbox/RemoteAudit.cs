@@ -95,7 +95,7 @@ namespace PSTools
 
     public class RunOptions
     {
-        public byte[] CollectorExe; public string CollectorArgs = "collect";
+        public byte[] CollectorExe;   // PT-58: the argument list is built per target by RemoteAudit.BuildCollectorArgs, not a fixed string
         public byte[] IocList; public byte[] EngagementPublicKey;
         public int DefaultTimeoutSec = 1800; public int StaleSweepSec = 1800; public bool PreflightOnly;
         public Action<string> Progress = delegate { };
@@ -112,7 +112,30 @@ namespace PSTools
         public RemoteAudit(Engagement eng, RunJournal journal, Func<TargetSpec, ITransport> makeTransport, Func<string, NetworkCred> resolveCred, DateTime nowUtc)
         { this.eng = eng; this.journal = journal; this.makeTransport = makeTransport; this.resolveCred = resolveCred; this.nowUtc = nowUtc; }
 
-        public RunResult RunOne(TargetSpec t, RunOptions opt)
+        /// <summary>Run a whole target list. The one-attempt rule is per credential: after a logon failure every remaining
+        /// target that uses that credential (by label, or by the same resolved account) is skipped, not attempted (PT-59).</summary>
+        public List<RunResult> RunBatch(List<TargetSpec> targets, RunOptions opt)
+        {
+            List<RunResult> results = new List<RunResult>();
+            System.Collections.Generic.HashSet<string> deadAccounts = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            System.Collections.Generic.HashSet<string> deadLabels = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (TargetSpec t in targets)
+            {
+                if (t.CredLabel.Length > 0 && deadLabels.Contains(t.CredLabel))
+                {
+                    RunResult s = new RunResult(); s.Host = t.Host; s.Transport = t.Transport; s.RunId = NewRunId();
+                    results.Add(Done(s, "skipped-locked-credential", "the credential '" + t.CredLabel + "' was rejected earlier in this batch; skipped before any logon to avoid locking the account", DateTime.UtcNow));
+                    continue;
+                }
+                RunResult r = RunOne(t, opt, deadAccounts); results.Add(r);
+                if (r.Status == "logon-failed") { if (t.CredLabel.Length > 0) deadLabels.Add(t.CredLabel); if (!string.IsNullOrEmpty(r.User)) deadAccounts.Add(r.User); }
+            }
+            return results;
+        }
+        public RunResult RunOne(TargetSpec t, RunOptions opt) { return RunOne(t, opt, null); }
+        /// <summary>deadAccounts holds the domain\user of every credential rejected earlier in this batch; a target
+        /// whose credential is in it is skipped before any logon, so one wrong password cannot lock the account across a batch (PT-59).</summary>
+        public RunResult RunOne(TargetSpec t, RunOptions opt, System.Collections.Generic.HashSet<string> deadAccounts)
         {
             RunResult r = new RunResult(); r.Host = t.Host; r.Transport = t.Transport; r.RunId = NewRunId();
             DateTime started = DateTime.UtcNow;
@@ -143,6 +166,7 @@ namespace PSTools
                 cred = resolveCred(t.CredLabel);
                 if (cred == null) return Done(r, "no-credential", "no credential labelled '" + t.CredLabel + "' in the store", started);
                 r.User = cred.User;
+                if (deadAccounts != null && deadAccounts.Contains(cred.User)) return Done(r, "skipped-locked-credential", "the account " + cred.User + " was rejected earlier in this batch; skipped before any logon to avoid locking it out", started);
                 try { tr.Connect(t.Host, cred, "pt-" + r.RunId); }
                 catch (TransportException ex)
                 {
@@ -171,7 +195,9 @@ namespace PSTools
                 // 5. execute with a hard timeout; kill on expiry and still try to fetch a partial bundle
                 int timeoutMs = Math.Max(1, (t.TimeoutSec > 0 ? t.TimeoutSec : opt.DefaultTimeoutSec)) * 1000;
                 ExecResult ex2;
-                try { int h = tr.Exec("PowerTowerCollect.exe", opt.CollectorArgs); ex2 = tr.Wait(h, timeoutMs); }
+                int budgetSec = Math.Max(1, timeoutMs / 1000 - 15);   // let the collector self-stop and write its bundle before the hard kill
+                string collectorArgs = BuildCollectorArgs(t, r.RunId, opt.EngagementPublicKey != null, opt.IocList != null, budgetSec);
+                try { int h = tr.Exec("PowerTowerCollect.exe", collectorArgs); ex2 = tr.Wait(h, timeoutMs); }
                 catch (TransportException ex)
                 {
                     if (ex.Code == "EXE_GONE") { TryClean(tr, r); return Done(r, "exe-blocked", "the staged collector vanished before or during execution - antivirus/EDR quarantined it, or remote process creation was blocked. Allow-list PowerTowerCollect.exe by hash and publisher for this engagement and tell the client SOC the run id " + r.RunId + ".", started); }
@@ -249,6 +275,20 @@ namespace PSTools
             finally { if (cred != null) cred.Zero(); if (tr != null) try { tr.Close(); } catch { } }
         }
 
+        /// <summary>The exact command line the controller sends: PowerTowerCollect.exe takes options directly (no "collect" verb),
+        /// writes bundle.ptb + done.json in its working dir (the staged dir the transport cd's into), and must be told how to seal.
+        /// Staged names are relative so they resolve in that dir. Every option here is one of CollectOptions.Help.</summary>
+        public static string BuildCollectorArgs(TargetSpec t, string runId, bool hasPubKey, bool hasIoc, int budgetSec)
+        {
+            List<string> a = new List<string>();
+            a.Add("--out"); a.Add("bundle.ptb");
+            if (hasPubKey) { a.Add("--pubkey"); a.Add("engagement.pub"); }   // seal to the engagement key; the host cannot read its own bundle
+            a.Add("--run-id"); a.Add(runId);
+            if (hasIoc) { a.Add("--ioc"); a.Add("ioc.txt"); }
+            if (t.Modules != null && t.Modules.Count > 0) { a.Add("--modules"); a.Add(string.Join(",", t.Modules.ToArray())); }
+            if (budgetSec > 0) { a.Add("--budget"); a.Add(budgetSec.ToString()); }
+            return string.Join(" ", a.ToArray());   // staged names, run id, modules and budget never contain a space
+        }
         static string NewRunId() { return DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6); }
         static string YN(bool b) { return b ? "yes" : "no"; }
         static string Short(string sha) { return sha == null ? "?" : (sha.Length > 12 ? sha.Substring(0, 12) : sha); }

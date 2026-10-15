@@ -177,6 +177,7 @@ namespace PSTools
         }
 
         static byte[] U8(string s) { return new System.Text.UTF8Encoding(false).GetBytes(s ?? ""); }
+        static string Short80(string s) { if (s == null) return ""; return s.Length > 80 ? s.Substring(0, 80) + "\u2026" : s; }   // PT-66: never echo a hostile target line in full
         static int RemoteAudit_(Args a)
         {
             ToolInfo info = Tools.ByKey("remote-audit"); Out.Header(info);
@@ -185,11 +186,11 @@ namespace PSTools
             Engagement eng; try { eng = Engagement.Load(engPath); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
 
             List<TargetSpec> targets = new List<TargetSpec>(); List<string> skipped = new List<string>();
-            foreach (string tv in a.All("target")) { string err; TargetSpec t = TargetList.Parse(tv, out err); if (t != null) targets.Add(t); else if (err != "blank") skipped.Add(tv + " (" + err + ")"); }
+            foreach (string tv in a.All("target")) { string err; TargetSpec t = TargetList.Parse(tv, out err); if (t != null) targets.Add(t); else if (err != "blank") skipped.Add(Short80(tv) + " (" + err + ")"); }
             foreach (string tf in a.All("targets"))
             {
                 string[] lines; try { lines = File.ReadAllLines(tf); } catch (Exception ex) { Out.Error("--targets: " + ex.Message); return Cli.USAGE; }
-                foreach (string ln in lines) { string err; TargetSpec t = TargetList.Parse(ln, out err); if (t != null) targets.Add(t); else if (err != "blank") skipped.Add(ln.Trim() + " (" + err + ")"); }
+                foreach (string ln in lines) { string err; TargetSpec t = TargetList.Parse(ln, out err); if (t != null) targets.Add(t); else if (err != "blank") skipped.Add(Short80(ln.Trim()) + " (" + err + ")"); }
             }
             if (targets.Count == 0) { foreach (string s in skipped) Out.Warn("skipped " + s); throw new UsageException("no valid targets - give --target <host> or --targets <file>"); }
             if (a.Has("cleanup") && a.Get("run", "").Length == 0) throw new UsageException("--cleanup needs --run <id>");
@@ -230,12 +231,12 @@ namespace PSTools
             RemoteAudit ctl = new RemoteAudit(eng, j, make, resolve, DateTime.UtcNow);
             string outDir = a.Get("out", engDir);
 
+            List<RunResult> runResults;
+            if (a.Has("cleanup")) { runResults = new List<RunResult>(); foreach (TargetSpec t in targets) { try { runResults.Add(ctl.Cleanup(t, a.Get("run", ""), opt)); } catch (Exception ex) { RunResult er = new RunResult(); er.Host = t.Host; er.Status = "error"; er.Detail = RemoteAudit.Scrub(ex.Message); runResults.Add(er); } } }
+            else { try { runResults = ctl.RunBatch(targets, opt); } catch (Exception ex) { Out.Error(RemoteAudit.Scrub(ex.Message)); runResults = new List<RunResult>(); } }   // PT-59: one logon attempt per credential across the whole batch
             List<object> results = new List<object>();
-            foreach (TargetSpec t in targets)
+            foreach (RunResult r in runResults)
             {
-                RunResult r;
-                try { r = a.Has("cleanup") ? ctl.Cleanup(t, a.Get("run", ""), opt) : ctl.RunOne(t, opt); }
-                catch (Exception ex) { r = new RunResult(); r.Host = t.Host; r.Status = "error"; r.Detail = RemoteAudit.Scrub(ex.Message); }
                 byte[] bundle = r.Tag as byte[];
                 if (bundle != null && !opt.PreflightOnly)
                 {
