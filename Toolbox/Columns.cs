@@ -550,5 +550,23 @@ namespace PSTools
             t.Group(o => new string[] { LR(o).Domain.Length > 0 ? LR(o).Domain : LR(o).Url, LR(o).User });
             return t;
         }
+        public static TableDef RemoteAudit()
+        {
+            Func<object, RunResult> R = delegate (object o) { return (RunResult)o; };
+            Func<string, Tone> tone = delegate (string s) { if (s == "ok" || s == "cleaned" || s == "preflight-ok") return Tone.Good; if (s == "ok-partial" || s == "timeout-partial" || s == "unreachable-preflight") return Tone.Warn; return Tone.Bad; };
+            TableDef t = new TableDef("remote-audit");
+            t.Add(new Col("host", "Host", 150, o => R(o).Host));
+            t.Add(new Col("status", "Status", 120, o => R(o).Status).Tint(o => tone(R(o).Status)));
+            t.Add(new Col("user", "Account", 130, o => R(o).User).Tint(Tone.Dim));
+            t.Add(new Col("verified", "Verified", 70, o => R(o).Verified ? "yes" : "").Tint(o => R(o).Verified ? Tone.Good : Tone.Dim));
+            t.Add(new Col("partial", "Partial", 60, o => R(o).Partial ? "yes" : "").Tint(Tone.Warn));
+            t.Add(new Col("clean", "Left clean", 70, o => R(o).LeftClean ? "yes" : "no").Tint(o => R(o).LeftClean ? Tone.Good : Tone.Bad));
+            t.Add(new Col("bytes", "Bundle", 80, o => R(o).Bytes == 0 ? (object)"" : R(o).Bytes).Num(o => R(o).Bytes == 0 ? "" : R(o).Bytes.ToString("N0")));
+            t.Add(new Col("seconds", "Secs", 50, o => R(o).Seconds).Num(o => R(o).Seconds.ToString("0.0")));
+            t.Add(new Col("runId", "Run id", 150, o => R(o).RunId).Tint(Tone.Dim));
+            t.Add(new Col("sha256", "SHA-256", 150, o => R(o).Sha).Tint(Tone.Dim));
+            t.Add(new Col("detail", "Detail", 600, o => R(o).Detail).Tint(Tone.Dim));
+            return t;
+        }
     }
 }

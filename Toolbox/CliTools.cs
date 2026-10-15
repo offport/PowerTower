@@ -153,8 +153,107 @@ namespace PSTools
             l[l.Count - 1].Run = Browsing; l[l.Count - 1].Tables = delegate { return new List<TableDef>(new TableDef[] { Columns.BrowserHistory(), Columns.BrowserDomains(new List<DomainStat>()), Columns.BrowserDownloads(), Columns.BrowserSearches(), Columns.BrowserPasswords(delegate { return false; }) }); };
 
             l.Add(new CliTool("findings-map")); l[l.Count - 1].Run = GuiOnly;
+            l.Add(new CliTool("remote-audit")
+                .Opt("engagement", "file", "the engagement.json whose scope, window and public key govern the run (or give it as the first argument)")
+                .Opt("target", "host", "one target host or IP; repeatable")
+                .Opt("targets", "file", "a CSV/text file of targets, one per line: host[,credLabel[,timeoutSec[,modules]]]")
+                .Opt("cred", "label", "the credential label in creds.ptv to use when a target line names none")
+                .Opt("creds", "file", "the credential store (default: creds.ptv beside the engagement)")
+                .Opt("pass-env", "NAME", "read the creds.ptv passphrase from this environment variable (never from the command line)")
+                .Opt("pass-file", "file", "read the creds.ptv passphrase from this file")
+                .Opt("collector", "file", "PowerTowerCollect.exe to stage (default: beside this exe)")
+                .Opt("ioc", "file", "an IOC list to stage with the collector")
+                .Opt("timeout", "seconds", "hard per-target timeout; the remote collector is killed on expiry (default 1800)")
+                .Opt("out", "folder", "where fetched bundles are written (default: beside the engagement)")
+                .Opt("journal", "file", "the append-only run journal (default: journal.ndjson beside the engagement)")
+                .Opt("preflight", null, "test reachability only (445/135/5985); send no credential and stage nothing")
+                .Opt("cleanup", null, "remove a run's staged dir after a controller crash; needs --run")
+                .Opt("run", "id", "the run id to clean up with --cleanup")
+                .Example("remote-audit eng.json --preflight --target 10.0.0.10")
+                .Example("remote-audit eng.json --targets hosts.csv --pass-env PTV_PASS --csv results.csv"));
+            l[l.Count - 1].Run = RemoteAudit_; l[l.Count - 1].Tables = delegate { return new List<TableDef>(new TableDef[] { Columns.RemoteAudit() }); };
             l.Add(new CliTool("about")); l[l.Count - 1].Run = About;
             return l;
+        }
+
+        static byte[] U8(string s) { return new System.Text.UTF8Encoding(false).GetBytes(s ?? ""); }
+        static int RemoteAudit_(Args a)
+        {
+            ToolInfo info = Tools.ByKey("remote-audit"); Out.Header(info);
+            string engPath = a.Get("engagement", a.Positional.Count > 0 ? a.Positional[0] : null);
+            if (engPath == null) throw new UsageException("--engagement <engagement.json>, or give it as the first argument");
+            Engagement eng; try { eng = Engagement.Load(engPath); } catch (BundleException ex) { Out.Error(ex.Message); return Cli.PROBLEMS; }
+
+            List<TargetSpec> targets = new List<TargetSpec>(); List<string> skipped = new List<string>();
+            foreach (string tv in a.All("target")) { string err; TargetSpec t = TargetList.Parse(tv, out err); if (t != null) targets.Add(t); else if (err != "blank") skipped.Add(tv + " (" + err + ")"); }
+            foreach (string tf in a.All("targets"))
+            {
+                string[] lines; try { lines = File.ReadAllLines(tf); } catch (Exception ex) { Out.Error("--targets: " + ex.Message); return Cli.USAGE; }
+                foreach (string ln in lines) { string err; TargetSpec t = TargetList.Parse(ln, out err); if (t != null) targets.Add(t); else if (err != "blank") skipped.Add(ln.Trim() + " (" + err + ")"); }
+            }
+            if (targets.Count == 0) { foreach (string s in skipped) Out.Warn("skipped " + s); throw new UsageException("no valid targets - give --target <host> or --targets <file>"); }
+            if (a.Has("cleanup") && a.Get("run", "").Length == 0) throw new UsageException("--cleanup needs --run <id>");
+
+            string engDir = Path.GetDirectoryName(Path.GetFullPath(engPath));
+            string credsPath = a.Get("creds", Path.Combine(engDir, "creds.ptv"));
+            byte[] pass = null;
+            if (a.Has("pass-env")) pass = U8(Environment.GetEnvironmentVariable(a.Get("pass-env", "")) ?? "");
+            else if (a.Has("pass-file")) { try { pass = File.ReadAllBytes(a.Get("pass-file", "")); } catch (Exception ex) { Out.Error("--pass-file: " + ex.Message); return Cli.USAGE; } }
+
+            RunOptions opt = new RunOptions();
+            opt.PreflightOnly = a.Has("preflight");
+            int to; opt.DefaultTimeoutSec = (int.TryParse(a.Get("timeout", ""), out to) && to > 0) ? to : 1800;
+            opt.EngagementPublicKey = eng.PublicKeyXml.Length > 0 ? U8(eng.PublicKeyXml) : null;
+            opt.Progress = delegate (string s) { Out.Line("  " + s, Tone.Dim); };
+            if (!opt.PreflightOnly && !a.Has("cleanup"))
+            {
+                string collector = a.Get("collector", Path.Combine(Cli.ExeDir, "PowerTowerCollect.exe"));
+                if (!File.Exists(collector)) { Out.Error("the collector to stage was not found: " + collector + " (build it, or pass --collector)"); return Cli.USAGE; }
+                opt.CollectorExe = File.ReadAllBytes(collector);
+                if (a.Has("ioc")) { try { opt.IocList = File.ReadAllBytes(a.Get("ioc", "")); } catch (Exception ex) { Out.Error("--ioc: " + ex.Message); return Cli.USAGE; } }
+            }
+
+            List<CredEntry> entries = null; bool loaded = false;
+            Func<string, NetworkCred> resolve = delegate (string label)
+            {
+                if (!loaded) { loaded = true; try { entries = File.Exists(credsPath) ? CredStore.Load(credsPath, pass, eng.Id) : new List<CredEntry>(); } catch (BundleException ex) { Out.Error("creds.ptv: " + ex.Message); entries = new List<CredEntry>(); } }
+                string want = label.Length > 0 ? label : a.Get("cred", "");
+                foreach (CredEntry e in entries) if (string.Equals(e.Label, want, StringComparison.OrdinalIgnoreCase)) return new NetworkCred(e.User, (byte[])e.Secret.Clone());
+                if (want.Length == 0 && entries.Count == 1) return new NetworkCred(entries[0].User, (byte[])entries[0].Secret.Clone());
+                return null;
+            };
+
+            string journalPath = a.Get("journal", Path.Combine(engDir, "journal.ndjson"));
+            RunJournal j = new RunJournal(journalPath);
+            int connectTimeoutMs = 4000;
+            Func<TargetSpec, ITransport> make = delegate (TargetSpec t) { return Transports.Make(t, connectTimeoutMs); };
+            RemoteAudit ctl = new RemoteAudit(eng, j, make, resolve, DateTime.UtcNow);
+            string outDir = a.Get("out", engDir);
+
+            List<object> results = new List<object>();
+            foreach (TargetSpec t in targets)
+            {
+                RunResult r;
+                try { r = a.Has("cleanup") ? ctl.Cleanup(t, a.Get("run", ""), opt) : ctl.RunOne(t, opt); }
+                catch (Exception ex) { r = new RunResult(); r.Host = t.Host; r.Status = "error"; r.Detail = RemoteAudit.Scrub(ex.Message); }
+                byte[] bundle = r.Tag as byte[];
+                if (bundle != null && !opt.PreflightOnly)
+                {
+                    try { Directory.CreateDirectory(outDir); string stem = r.Host.Replace(':', '-') + "_" + r.RunId + "_bundle.ptb"; string outp = Path.Combine(outDir, stem); File.WriteAllBytes(outp, bundle); r.Detail += " -> " + outp; }
+                    catch (Exception ex) { r.Detail += " (could not write the bundle: " + ex.Message + ")"; }
+                }
+                r.Tag = null;
+                results.Add(r);
+            }
+            if (entries != null) foreach (CredEntry e in entries) e.Zero();   // wipe the store's secrets from memory
+
+            View v = new View(Columns.RemoteAudit()); v.Configure(a); v.Set(results); v.Show(a);
+            foreach (string s in skipped) Out.Warn("skipped target " + s);
+            Out.Line("  journal: " + journalPath, Tone.Dim);
+            int failed = 0; foreach (object o in results) if (((RunResult)o).Failed) failed++;
+            if (failed > 0) Out.Warn(failed + " of " + results.Count + " target(s) failed");
+            else Out.Ok(results.Count + " target(s) completed");
+            return failed > 0 ? Cli.PROBLEMS : Cli.OK;
         }
 
         static int GuiOnly(Args a)

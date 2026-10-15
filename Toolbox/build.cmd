@@ -15,7 +15,7 @@ set "REFS=/r:System.dll /r:System.Core.dll /r:Microsoft.CSharp.dll /r:System.Man
 if errorlevel 1 ( echo app build failed & exit /b 1 )
 echo built PowerTower.exe
 
-"%CSC%" /nologo /codepage:65001 /target:exe /optimize+ /out:PowerTowerCli.exe %REFS% Cli.cs CliTools.cs Repl.cs %SHARED%
+"%CSC%" /nologo /codepage:65001 /target:exe /optimize+ /out:PowerTowerCli.exe %REFS% Cli.cs CliTools.cs Repl.cs RemoteAudit.cs RemoteAuditSupport.cs RemoteTransport.cs %SHARED%
 if errorlevel 1 ( echo cli build failed & exit /b 1 )
 echo built PowerTowerCli.exe
 
@@ -25,6 +25,6 @@ rem AutorunsWrite.cs and are not compiled in, nor are credentials, browser data,
 if errorlevel 1 ( echo collector build failed & exit /b 1 )
 echo built PowerTowerCollect.exe
 
-"%CSC%" /nologo /codepage:65001 /target:exe /optimize+ /out:Tests.exe %REFS% Tests.cs %SHARED%
+"%CSC%" /nologo /codepage:65001 /target:exe /optimize+ /out:Tests.exe %REFS% Tests.cs RemoteAudit.cs RemoteAuditSupport.cs %SHARED%
 if errorlevel 1 ( echo tests build failed & exit /b 1 )
 echo built Tests.exe

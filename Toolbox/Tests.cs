@@ -21,7 +21,7 @@ namespace PSTools
         static int Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
+            foreach (Action t in new Action[] { Extractor_, Hosts_, Firewall_, Reach_, Conns_, Procs_, Storage_, Journal_, BinRecord_, ExFat_, Csv_, Json_, Ver_, ProductMap_, Cpe_, MsrcParse_, MsrcWindow_, Resolve_, Inventory_, Feeds_, Recon_, Pdf_, Wildcard_, Hashes_, Crypto_, Walk_, Checklist_, DeletedFilter_, Active_, Trust_, Autoruns_, Events_, Dupes_, Secrets_, Bundle_, Engagement_, Collect_, BundleGate_, CollectorAssembly_, Enrich_, FeedPack_, EngagementTool_, EngagementStrict_, FailClosed_, Ptreport_, Report_, ReportCoverage_, ReportMarkdown_, RemoteAudit_, RemoteFuzz_ }) { try { t(); } catch (Exception ex) { Check(false, t.Method.Name + " threw " + ex.GetType().Name + ": " + ex.Message); } }
             Console.WriteLine(); Console.WriteLine(pass + " passed, " + fail + " failed");
             return fail;
         }
@@ -1060,6 +1060,156 @@ namespace PSTools
                 if (!pImg) { int at = pdf.IndexOf("beacon"); Info("pdf beacon context: " + (at < 0 ? "(absent)" : pdf.Substring(Math.Max(0, at - 50), Math.Min(130, pdf.Length - Math.Max(0, at - 50))).Replace("\n", "\\n").Replace("\r", "\\r"))); }
                 if (pRaw.Success) Info("pdf unescaped paren context: " + pdf.Substring(Math.Max(0, pRaw.Index - 60), Math.Min(150, pdf.Length - Math.Max(0, pRaw.Index - 60))).Replace("\n", "\\n").Replace("\r", "\\r"));
                 Check(pJs && pImg && !pRaw.Success, "report pdf: link and image syntax stay inside the string operand with escaped parentheses");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── Phase 3: the agentless remote-audit controller, driven entirely by the FakeTransport ──
+        const string SECRET = "S3cr3t-Ph3-PASSWORD-do-not-leak", ACCOUNT = "LAB\\auditor";
+        static Engagement Ph3Eng()
+        {
+            Engagement e = new Engagement(); e.Id = "ENG-PH3"; e.Client = "Acme"; e.Operator = "ops";
+            e.Scope.Add("10.0.0.0/24"); e.WindowStartUtc = DateTime.UtcNow.AddDays(-1); e.WindowEndUtc = DateTime.UtcNow.AddDays(1);
+            e.PublicKeyXml = "<RSAKeyValue><Modulus>abc</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>";
+            return e;
+        }
+        static TargetSpec Ph3Target(string host) { TargetSpec t = new TargetSpec(); t.Host = host; t.CredLabel = "lab"; t.TimeoutSec = 5; return t; }
+        static RunResult Ph3Run(Engagement e, FakeTransport fake, RunJournal j, string host, out bool credRead, RunOptions optOverride)
+        {
+            bool read = false;
+            Func<TargetSpec, ITransport> make = delegate (TargetSpec ts) { return fake; };
+            Func<string, NetworkCred> resolve = delegate (string label) { read = true; return new NetworkCred(ACCOUNT, Encoding.UTF8.GetBytes(SECRET)); };
+            RemoteAudit ctl = new RemoteAudit(e, j, make, resolve, DateTime.UtcNow);
+            RunOptions opt = optOverride ?? new RunOptions(); opt.CollectorExe = Encoding.UTF8.GetBytes("MZcollector"); opt.DefaultTimeoutSec = 5;
+            RunResult r = ctl.RunOne(Ph3Target(host), opt); credRead = read; return r;
+        }
+        static void RemoteAudit_()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-ph3-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                Engagement e = Ph3Eng(); string jp = Path.Combine(dir, "journal.ndjson"); bool cr;
+
+                // 1. happy path: ok, verified, left clean, one connect, bundle carried back
+                FakeTransport ok = new FakeTransport(); RunResult r = Ph3Run(e, ok, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r.Status == "ok" && r.Verified && r.LeftClean && r.Tag is byte[] && ok.ConnectCalls == 1 && ok.DeleteCalls >= 1 && !ok.Exists(), "remote: a clean run verifies the SHA-256, carries the bundle back and leaves zero artifacts (status " + r.Status + ", connects " + ok.ConnectCalls + ")");
+
+                // 2. out of scope: refused BEFORE any transport call or credential read
+                FakeTransport oos = new FakeTransport(); RunResult r2 = Ph3Run(e, oos, new RunJournal(jp), "192.168.5.5", out cr, null);
+                Check(r2.Status == "refused-scope" && oos.ConnectCalls == 0 && oos.LogonAttempts == 0 && oos.LastSecretSeen == null && !cr, "remote: an out-of-scope host is refused before any network call or credential read (" + r2.Status + ", connects " + oos.ConnectCalls + ", credRead " + cr + ")");
+
+                // 3. out of window
+                Engagement past = Ph3Eng(); past.WindowStartUtc = DateTime.UtcNow.AddDays(-5); past.WindowEndUtc = DateTime.UtcNow.AddDays(-2);
+                FakeTransport ow = new FakeTransport(); RunResult r3 = Ph3Run(past, ow, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r3.Status == "refused-window" && ow.ConnectCalls == 0 && !cr, "remote: an out-of-window run is refused before any network call (" + r3.Status + ")");
+
+                // 4. host down: no credential sent
+                FakeTransport down = new FakeTransport(); down.Smb445 = false; RunResult r4 = Ph3Run(e, down, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r4.Status == "unreachable" && down.LogonAttempts == 0 && down.LastSecretSeen == null, "remote: a host with 445 down is unreachable and no credential is sent (" + r4.Status + ")");
+
+                // 5. logon failure: exactly ONE attempt, no retry
+                FakeTransport lf = new FakeTransport(); lf.ConnectThrowCode = "LOGON_FAILURE"; RunResult r5 = Ph3Run(e, lf, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r5.Status == "logon-failed" && lf.LogonAttempts == 1, "remote: a logon failure stops after exactly ONE attempt (attempts " + lf.LogonAttempts + ") so the account cannot be locked out");
+
+                // 6. token filter / UAC remote restriction
+                FakeTransport tf = new FakeTransport(); tf.ConnectThrowCode = "TOKEN_FILTER"; RunResult r6 = Ph3Run(e, tf, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r6.Status == "token-filter" && r6.Detail.IndexOf("LocalAccountTokenFilterPolicy") >= 0, "remote: a filtered token (ADMIN$ denied after logon) is detected and explained, never changed");
+
+                // 7. ADMIN$ missing
+                FakeTransport am = new FakeTransport(); am.ConnectThrowCode = "ADMIN_SHARE"; RunResult r7 = Ph3Run(e, am, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r7.Status == "admin-share", "remote: a missing/disabled ADMIN$ is reported (" + r7.Status + ")");
+
+                // 8. exe quarantined / vanished -> cleanup still attempted
+                FakeTransport q = new FakeTransport(); q.ExeVanishes = true; RunResult r8 = Ph3Run(e, q, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r8.Status == "exe-blocked" && r8.Detail.IndexOf(r8.RunId) >= 0 && q.DeleteCalls >= 1, "remote: a quarantined/vanished collector is detected, the run id is given for the SOC, and the staged dir is cleaned");
+
+                // 9. hang -> timeout -> partial bundle, killed, cleaned, unverified
+                FakeTransport hg = new FakeTransport(); hg.Hangs = true; RunResult r9 = Ph3Run(e, hg, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r9.Status == "timeout-partial" && r9.Partial && !r9.Verified && r9.Tag is byte[] && r9.LeftClean, "remote: a hang is killed at the timeout and a partial, unverified bundle is fetched (" + r9.Status + ")");
+
+                // 10. partial module -> ok-partial, still verified
+                FakeTransport pm = new FakeTransport(); pm.PartialModule = true; RunResult r10 = Ph3Run(e, pm, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r10.Status == "ok-partial" && r10.Verified && r10.Partial, "remote: a partial module yields ok-partial with a verified bundle");
+
+                // 11. reboot mid-run -> failed, no retry
+                FakeTransport rb = new FakeTransport(); rb.Reboot = true; RunResult r11 = Ph3Run(e, rb, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r11.Status == "reboot-failed" && rb.WaitCalls == 1, "remote: a lost session mid-run is marked failed and not auto-retried");
+
+                // 12. hash mismatch -> rejected, bundle not kept, cleaned
+                FakeTransport bh = new FakeTransport(); bh.BadHash = true; RunResult r12 = Ph3Run(e, bh, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r12.Status == "hash-mismatch" && !(r12.Tag is byte[]) && bh.DeleteCalls >= 1 && !bh.Exists(), "remote: a SHA-256 mismatch is refused, the bundle is not kept, the dir is cleaned");
+
+                // 13. no bundle produced
+                FakeTransport nb = new FakeTransport(); nb.NoBundle = true; RunResult r13 = Ph3Run(e, nb, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r13.Status == "no-bundle", "remote: a run that produces no bundle.ptb is a failure (" + r13.Status + ")");
+
+                // 14. malformed done.json -> cannot verify -> failed
+                FakeTransport bd = new FakeTransport(); bd.BadDoneJson = true; RunResult r14 = Ph3Run(e, bd, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r14.Status == "no-done", "remote: a malformed/missing done.json means the transfer cannot be verified and the run fails (" + r14.Status + ")");
+
+                // 15. cleanup could not complete -> flagged, not silently "ok"
+                FakeTransport df = new FakeTransport(); df.DeleteFails = true; RunResult r15 = Ph3Run(e, df, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(r15.Status == "ok" && !r15.LeftClean && r15.Detail.IndexOf("cleanup --run") >= 0, "remote: when the staged dir cannot be removed the run is ok but flagged not-clean with a cleanup hint");
+
+                // 16. controller-crash cleanup command + stale sweep
+                FakeTransport cu = new FakeTransport(); cu.Stale.Add(new StagedDir { Name = "pt-old", WhenUtc = DateTime.UtcNow.AddHours(-3) });
+                Func<TargetSpec, ITransport> mk = delegate (TargetSpec ts) { return cu; }; Func<string, NetworkCred> rc = delegate (string l) { return new NetworkCred(ACCOUNT, Encoding.UTF8.GetBytes(SECRET)); };
+                RemoteAudit ctl2 = new RemoteAudit(e, new RunJournal(jp), mk, rc, DateTime.UtcNow);
+                RunResult r16 = ctl2.Cleanup(Ph3Target("10.0.0.10"), "abc123", new RunOptions());
+                Check(r16.Status == "cleaned" && cu.DeleteCalls >= 1 && !cu.Exists(), "remote: cleanup --run removes the staged dir after a controller crash and sweeps stale dirs");
+
+                // ── the secret must never appear: journal file, result fields, cred ToString ──
+                string journalText = File.ReadAllText(jp);
+                bool inJournal = journalText.IndexOf(SECRET) >= 0;
+                bool inResults = false; foreach (RunResult rr in new RunResult[] { r, r5, r6, r8, r9, r12, r15 }) { if ((rr.Detail ?? "").IndexOf(SECRET) >= 0 || (rr.User ?? "").IndexOf(SECRET) >= 0) inResults = true; }
+                Check(!inJournal && !inResults && journalText.IndexOf("auditor") >= 0, "remote: the secret appears nowhere in the journal or results, though the account (domain\\user) is recorded");
+                NetworkCred nc = new NetworkCred(ACCOUNT, Encoding.UTF8.GetBytes(SECRET));
+                Check(nc.ToString().IndexOf(SECRET) < 0, "remote: NetworkCred.ToString() never prints the secret");
+                nc.Zero(); bool zeroed = true; foreach (byte bb in nc.SecretBytes) if (bb != 0) zeroed = false; Check(zeroed, "remote: a credential's secret bytes are zeroed by Zero()");
+
+                // ── credential store: DPAPI round-trip, not plaintext; passphrase round-trip; tamper/wrong-pass refused ──
+                List<CredEntry> entries = new List<CredEntry>(); CredEntry ce = new CredEntry(); ce.Label = "lab"; ce.User = ACCOUNT; ce.Secret = Encoding.UTF8.GetBytes(SECRET); entries.Add(ce);
+                string dpv = Path.Combine(dir, "creds.ptv"); CredStore.SaveDpapi(dpv, entries, e.Id);
+                byte[] dpvBytes = File.ReadAllBytes(dpv); bool dpvPlain = IndexOf(dpvBytes, Encoding.UTF8.GetBytes(SECRET)) >= 0;
+                List<CredEntry> back = CredStore.Load(dpv, null, e.Id);
+                Check(!dpvPlain && back.Count == 1 && Encoding.UTF8.GetString(back[0].Secret) == SECRET && back[0].User == ACCOUNT, "remote: creds.ptv (DPAPI) is not plaintext on disk and round-trips the secret");
+                string wrongEng = ""; try { CredStore.Load(dpv, null, "OTHER-ENG"); } catch (Exception ex) { wrongEng = ex.Message; } Check(wrongEng.Length > 0, "remote: a creds.ptv (DPAPI) bound to one engagement will not open under another id");
+                string ppv = Path.Combine(dir, "creds-pp.ptv"); byte[] pass = Encoding.UTF8.GetBytes("a-long-passphrase-123"); CredStore.SavePass(ppv, entries, pass);
+                byte[] ppvBytes = File.ReadAllBytes(ppv); List<CredEntry> back2 = CredStore.Load(ppv, pass, e.Id);
+                Check(IndexOf(ppvBytes, Encoding.UTF8.GetBytes(SECRET)) < 0 && back2.Count == 1 && Encoding.UTF8.GetString(back2[0].Secret) == SECRET, "remote: creds.ptv (passphrase) is AES-encrypted and round-trips the secret");
+                string wrongPass = ""; try { CredStore.Load(ppv, Encoding.UTF8.GetBytes("wrong"), e.Id); } catch (Exception ex) { wrongPass = ex.Message; } Check(wrongPass.Length > 0, "remote: the wrong passphrase is refused (HMAC check)");
+                ppvBytes[ppvBytes.Length - 1] ^= 0xFF; File.SetAttributes(ppv, FileAttributes.Normal); File.WriteAllBytes(ppv, ppvBytes); string tampered = ""; try { CredStore.Load(ppv, pass, e.Id); } catch (Exception ex) { tampered = ex.Message; } Check(tampered.Length > 0, "remote: a tampered creds.ptv is refused (encrypt-then-MAC)");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+        static void RemoteFuzz_()
+        {
+            // hostnames: hostile ones refused, legitimate ones accepted - never a crash
+            string[] bad = { "\\\\evil\\share", "//evil/share", "../../Windows", "a..b", "host;calc.exe", "a b", "%SystemRoot%", "x`whoami`", "h$t", "ab|cd", "\x01ctrl", new string('h', 300), "" };
+            string[] good = { "10.0.0.10", "WS-01", "host.corp.local", "server_2022", "fe80::1", "::1" };
+            int refused = 0; foreach (string h in bad) { string why; if (!TargetList.ValidHost(h, out why) && why != null) refused++; }
+            int ok = 0; foreach (string h in good) { string why; if (TargetList.ValidHost(h, out why)) ok++; }
+            Check(refused == bad.Length && ok == good.Length, "remote fuzz: all " + bad.Length + " hostile host strings refused (" + refused + "), all " + good.Length + " legitimate ones accepted (" + ok + ")");
+
+            // target CSV lines: injection and oversize do not crash the parser
+            string[] lines = { "10.0.0.10,lab,30,inventory;recon", "  # a comment", "", "\\\\unc\\x,lab", "host;rm -rf,lab", new string('z', 5000) + ",lab", "10.0.0.11" };
+            int parsed = 0, skipped = 0; foreach (string ln in lines) { string err; TargetSpec ts = TargetList.Parse(ln, out err); if (ts != null) parsed++; else skipped++; }
+            Check(parsed == 2 && skipped == lines.Length - 2, "remote fuzz: the target list parser takes the 2 valid lines and skips the rest (comments, blanks, UNC, injection, oversize) without crashing (parsed " + parsed + ")");
+
+            // journal parser: good / malformed / oversize / empty lines - only the good survive, no crash/hang
+            string dir = Path.Combine(Path.GetTempPath(), "pstools-ph3j-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+            try
+            {
+                string jp = Path.Combine(dir, "j.ndjson");
+                RunResult r = new RunResult(); r.Host = "10.0.0.10"; r.Status = "ok"; r.User = ACCOUNT; RunJournal j = new RunJournal(jp); j.Append(r); j.Append(r);
+                using (StreamWriter w = new StreamWriter(jp, true)) { w.WriteLine("{ not json at all"); w.WriteLine(""); w.WriteLine(new string('x', 200000)); w.WriteLine("{\"status\":\"ok\",\"host\":\"h\"}"); }
+                List<Dictionary<string, object>> got = j.Read();
+                Check(got.Count == 3, "remote fuzz: the journal reader keeps the 3 well-formed lines and skips the malformed, empty and over-long ones (" + got.Count + ")");
+
+                // done.json fuzz: wrong hash, malformed, oversize all refused by the controller, no crash
+                Engagement e = Ph3Eng(); bool cr;
+                FakeTransport big = new FakeTransport(); big.Bundle = new byte[2 * 1024 * 1024]; RunResult rb = Ph3Run(e, big, new RunJournal(jp), "10.0.0.10", out cr, null);
+                Check(rb.Status == "ok" && rb.Verified && rb.Bytes == big.Bundle.Length, "remote fuzz: a 2 MB bundle verifies and round-trips its byte count");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
