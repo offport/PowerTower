@@ -8,7 +8,7 @@ PowerTower audits, monitors and cleans up the machine it runs on: a read-only re
 
 It runs on the .NET Framework that is already part of Windows 10 and 11 and is compiled with the C# compiler that ships inside Windows — nothing to install, no packages, no runtime to download. Copy the folder anywhere (a USB stick works) and double-click `Toolbox\PowerTower.exe`.
 
-> PowerTower grew out of a set of PowerShell scripts, kept untouched in the folders beside `Toolbox\`. The app re-implements their logic in C# so every result is an object with columns instead of console text.
+> Every tool except the two maps is also a command: `Toolbox\PowerTowerCli.exe <tool>` gives the same names, columns, filters and CSV export from a terminal. See **Command line** below.
 
 ## Highlights
 
@@ -186,11 +186,60 @@ Command-line flags: `--tool <PanelClassName>` opens on a tool, `--theme "<name>"
 
 ```
 cd Toolbox
-build.cmd      builds PowerTower.exe and Tests.exe with %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe
+build.cmd      builds PowerTower.exe, PowerTowerCli.exe and Tests.exe with %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe
 Tests.exe      runs the engine tests; the exit code is the number of failures
 ```
 
 C# 5 on .NET Framework 4.8, WinForms, zero external libraries: the SQLite reader, the PDF writer, the JSON reader, the exFAT and USN-journal readers, the Authenticode and catalog verification, the country-shape map and the force-directed graph are all in the sources. No SDK or Visual Studio is required.
+
+## Command line
+
+`Toolbox\PowerTowerCli.exe` is the same workbench for a terminal: the same tools in the same order, the same
+columns, and the app's view bar as options. If you know one, you know the other.
+
+```
+PowerTowerCli                          the tools, grouped like the sidebar (in a terminal, drops into the console)
+PowerTowerCli console                  interactive console — a Metasploit-style shell over the same tools
+PowerTowerCli <tool> --help            options, actions and columns of one tool
+PowerTowerCli firewall --risky
+PowerTowerCli autoruns --non-microsoft --view tree
+PowerTowerCli deleted-files --drives E --type jpg,mp4 --recoverable --csv lost.csv
+PowerTowerCli software --scan --where "cves greater than 0" --sort sev --desc
+PowerTowerCli blocker --file threats.txt --select "kind equals domain" --block
+```
+
+### Interactive console
+
+`PowerTowerCli console` (or just `PowerTowerCli` in a terminal) opens a Metasploit-style shell. Each tool is a
+*module*: `use` one, `set` its options, `run` it. Every run prints the equivalent one-shot line, so the console
+is also a way to learn the flags. Piped or redirected, the bare command still prints the plain tool list, so
+scripts are unaffected.
+
+```
+show tools            every module, grouped and numbered
+search <text>         modules whose name or description match
+use <module|#>        select a module (e.g. use recon, or use 1)
+info                  the module's full help: options, columns, examples
+options               the module's options and the values you have set
+set <opt> <value>     set an option (set path D:\Photos, set view tree)
+unset <opt|all>       clear an option
+run                   run the module with the options set (also: exploit)
+back · banner · help · exit
+```
+
+| in the app | on the command line |
+|---|---|
+| Grid / Details / Tree | `--view grid`, `--view details`, `--view tree` |
+| search box | `--search <text>` |
+| click a column header | `--sort <column>`, `--desc` |
+| Filter rules (13 operators, units understood) | `--where "<column> <operator> <value>"`, repeatable, AND |
+| tick rows / Select all | `--select "<column> <operator> <value>"` / `--all` |
+| the action bar under the rows | the tool's action flags, applied to the ticked rows |
+| Yes in a confirmation | `--yes` |
+| Export CSV… | `--csv <file>` — a bare filename lands in a `reports\` folder next to the exe; pass a path to write elsewhere |
+
+Tables go to stdout, progress to stderr; settings and the feed cache are shared with the app. The full
+tool-by-tool reference is in [`Toolbox/README.md`](Toolbox/README.md#command-line-powertowercliexe).
 
 ## Safety notes
 
@@ -202,13 +251,8 @@ C# 5 on .NET Framework 4.8, WinForms, zero external libraries: the SQLite reader
 ## Repository layout
 
 ```
-Toolbox\                            the app: sources, build.cmd, PowerTower.exe, Tests.exe
-Toolbox\README.md                   tool-by-tool reference — every column, action and flag
+Toolbox\                            sources, build.cmd, PowerTower.exe (the app), PowerTowerCli.exe (the command line), Tests.exe
+Toolbox\README.md                   tool-by-tool reference — every column, action and flag, for the app and the command line
+Toolbox\samples\                    sample input files for the blocker and the reachability verifier
 docs\screenshots\                   the images on this page
-DeletedFilesFinder\                 the original PowerShell scripts, unchanged
-DiskStorageAnalyzer\
-DomainAndIPBlocker\
-DomainAndIPReachabilityVerifier\
-NetworkConnectionsMonitor\
-ProcessResourceConsumptionAnalyzer\
 ```

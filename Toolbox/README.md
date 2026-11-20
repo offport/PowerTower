@@ -2,14 +2,15 @@
 
 > The overview with screenshots is the [repository README](../README.md); this page is the tool-by-tool reference.
 
-A portable Windows desktop app with the same jobs as the scripts in the folders beside this one,
-done as rows you can sort, search, tick and act on instead of console text. One `.exe`, no
-installer: it runs on the .NET Framework that is already part of Windows 10 and 11. Copy the whole
-`PowerTower` folder anywhere and double-click `Toolbox\PowerTower.exe`.
+A portable Windows security workbench: twenty-two tools as rows you can sort, search, tick and act
+on, in one desktop app and, for everything that is not a map, as one command-line suite with the same
+names, columns and grammar. No installer: both run on the .NET Framework that is already part of
+Windows 10 and 11. Copy the whole `PowerTower` folder anywhere and double-click `Toolbox\PowerTower.exe`,
+or open a prompt in `Toolbox\` and run `PowerTowerCli <tool>`.
 
-**The scripts are untouched.** The app is a separate copy of their logic in C# (`Net.cs`, `Sys.cs`,
-`Vuln.cs`), rebuilt so every result is an object with columns rather than a line of text. The
-`.ps1` files and their `Run-*.cmd` launchers keep working exactly as before.
+**One set of engines, one set of columns.** `Net.cs`, `Sys.cs`, `Vuln.cs` and the other engine files do
+the work; `Columns.cs` defines every table once; the app renders it in a grid and the command line in the
+console. A column added there appears in both, with the same header, and in the CSV either one exports.
 
 ```
 ┌ sidebar ─────────────┐┌ Vulnerability Management ────────────────────────────────────────────────┐
@@ -63,8 +64,8 @@ installer: it runs on the .NET Framework that is already part of Windows 10 and 
 
 **It is not**
 
-- **Not a script runner.** Nothing is executed through `powershell.exe`; the app has its own
-  engines. If you change a script, the app does not change with it (and the other way round).
+- **Not a script runner.** Nothing is executed through `powershell.exe`; the app and the command
+  line have their own engines, compiled from the same sources.
 - **Not an installer of anything.** No service, no scheduled task, no registry settings outside
   the hosts file and firewall rule you ask for.
 - **Not a remote tool.** Everything is about this machine. The vulnerability feeds are the only
@@ -376,12 +377,715 @@ with a step strip; ticking *include security checklist* adds its findings and ab
 
 ---
 
+## Command line: `PowerTowerCli.exe`
+
+Every tool except the two maps is also a command. The names, the order, the columns and the view bar are
+the app's, so knowing one teaches the other:
+
+| in the app | on the command line |
+|---|---|
+| a tool in the sidebar | `PowerTowerCli <tool>` (the same names, in the same order: `PowerTowerCli` alone lists them) |
+| the header: title, blurb, administrator note | printed above every result |
+| the summary cards | one `KEY value` line above the table |
+| Grid / Details / Tree | `--view grid` (default), `--view details`, `--view tree` (the same grouping) |
+| the search box | `--search <text>` |
+| clicking a column header | `--sort <column>` and `--desc` |
+| Filter → a rule, chips combine with AND | `--where "<column> <operator> <value>"`, repeatable; the same 13 operators, the same unit parsing (`size at least 10 MB`) |
+| ticking rows, Select all | `--select "<column> <operator> <value>"`, repeatable, or `--all` |
+| the bar of actions under the rows | the tool's action flags (`--block`, `--recover-to`, `--disable`, `--encrypt`, …), applied to the ticked rows |
+| Yes in a confirmation | `--yes` (asked on the console otherwise; refused when there is no console) |
+| Export CSV… | `--csv <file>`, the same headers, the ticked rows or everything shown |
+| the combo boxes and toggles next to the search box | the tool's filter options (`--risky`, `--severity`, `--status`, `--source`, …) |
+| Restart as administrator | run from an elevated prompt; tools say when they need it |
+
+Tables go to stdout and progress to stderr, so `PowerTowerCli firewall --risky | more` and `--csv` compose. Exit codes:
+0 ok · 1 problems · 2 usage · 3 administrator needed · 4 cancelled. `settings.ini` and `cache\` are shared with the app.
+
+```
+▌ POWERTOWER
+  portable security workbench · command line · administrator
+
+usage:  PowerTowerCli <tool> [options]
+        PowerTowerCli <tool> --help        options, actions and columns of one tool
+
+Recon & network
+  recon            System Recon & Audit        needs administrator for some actions
+  blocker          Domain and IP Blocker       needs administrator for some actions
+  reachability     Reachability Verifier       
+  connections      Connections Monitor         
+  network-map      Network Map                 desktop app only (visual)
+  firewall         Firewall Rules              
+
+Files & storage
+  resource-usage   Resource Usage              
+  disk-usage       Disk Usage                  
+  deleted-files    Deleted Files Finder        needs administrator for some actions
+  file-explorer    File Explorer               
+  find-files       Find Files                  
+  duplicates       Duplicate Finder            
+
+Vulnerabilities & software
+  vulnerabilities  Vulnerability Management    
+  software         Software Inventory          
+
+Threat hunting & incident response
+  autoruns         Autoruns                    needs administrator for some actions
+  events           Event Log Triage            needs administrator for some actions
+  checklist        Security Checklist          needs administrator for some actions
+
+Secrets & credentials
+  secrets          Secrets Scanner             
+  credentials      Wi-Fi & Credentials         
+  browsing         Browsing Data               
+
+Putting it together
+  findings-map     Findings Map                desktop app only (visual)
+
+  about            
+  version          
+
+Every tool shows rows the way the app does and takes the same view options:
+  --view <grid|details|tree>    how to show the rows: the app's Grid, Details or Tree button
+  --search <text>               keep the rows where any column contains this text: the search box
+  --sort <column>               sort by a column (its key or title); add --desc for descending: clicking a header
+  --desc                        sort descending
+  --where <"column op value">   a filter rule, repeatable; rules combine with AND: the Filter bar. Column is a key, a title or 'any'; op is one of: contains,
+                                does not contain, equals, does not equal, starts with, ends with, matches regex, is empty, is not empty, greater than, less
+                                than, at least, at most (numbers understand KB/MB/GB, %, ms)
+  --select <"column op value">  tick the rows that match, repeatable; actions and --csv then apply to the ticked rows: the row checkboxes
+  --all                         let an action apply to every shown row when nothing is ticked: Select all
+  --csv <file>                  write the shown rows, or the ticked ones, as CSV with the app's headers: Export CSV…
+  --top <n>                     print only the first n rows (the CSV is never cut)
+  --yes                         answer yes to every confirmation (required when input is not a terminal)
+  --no-color                    plain output
+  --width <n>                   lay the grid out for this many columns instead of the console width
+  --quiet                       no progress on stderr
+  --help                        help for the tool
+
+Tables go to stdout, progress to stderr. Exit codes: 0 ok · 1 problems · 2 usage · 3 administrator needed · 4 cancelled.
+```
+
+### `recon`
+
+```
+▌ SYSTEM RECON & AUDIT
+  administrator: yes
+  A read-only security enumeration of this machine: system, users and groups, network, security posture,
+  persistence surface, running processes and recent security events. Risky settings are flagged. Download
+  the whole report as Markdown, JSON or PDF. For authorized use only.
+
+usage:  PowerTowerCli recon [options]
+
+options and actions
+  --no-events                   skip the Security / System / PowerShell event logs (the app's 'recent
+                                event logs' toggle)
+  --section <name>              only this section, e.g. "3. Network" or just "3."
+  --flagged                     only the facts flagged risk or review
+  --md <file>                   save the report as Markdown (no value: recon_<host>_<time>.md)
+  --json <file>                 save the report as JSON
+  --pdf <file>                  save the report as PDF
+  --log                         print the audit log and what was limited
+
+columns of recon-audit   (tree view groups the rows)
+  section · group (Category) · name (Item) · value · risk (Flag) · note
+
+examples
+  PowerTowerCli recon --flagged
+  PowerTowerCli recon --section "4." --view tree
+  PowerTowerCli recon --where "flag equals risk" --csv risks.csv --md
+```
+
+### `blocker`
+
+```
+▌ DOMAIN AND IP BLOCKER
+  administrator: yes
+  Load domains and IPs from any file or paste, review them as rows, block or unblock the ones you pick.
+  Domains go to the hosts file, IPs to one firewall rule; everything is tagged, backed up and reversible.
+
+usage:  PowerTowerCli blocker [options]
+
+options and actions
+  --file <path>                 add the domains and IPs found in this file (any text: lists, CSV, logs,
+                                defanged names); repeatable
+  --add <value>                 add one domain or IP; repeatable
+  --stdin                       add what is piped in
+  --blocked                     show what is blocked right now instead of the loaded list (the 'Blocked
+                                now' button)
+  --block                       block the ticked rows (or --all): domains to the hosts file, IPs to the
+                                firewall rule
+  --unblock                     unblock the ticked rows (or --all)
+  --no-hosts                    do not touch the hosts file
+  --no-firewall                 do not touch the firewall rule
+  --no-www                      do not add the www. variant of each domain
+  --sink <ip>                   the address blocked domains resolve to (default from settings, else
+                                0.0.0.0)
+  --backups                     list the hosts-file backups
+  --restore <backup-file>       restore the hosts file from one of its backups
+  --flush-dns                   flush the DNS cache after changing the hosts file
+
+columns of block-list   (tree view groups the rows)
+  value (Domain / IP) · kind · status · where (Blocked by) · note · line · source (Source line)
+columns of blocked-now   (tree view groups the rows)
+  value (Domain / IP) · kind · where (Blocked by) · note (Detail)
+
+examples
+  PowerTowerCli blocker --file samples\sample-blocklist.txt
+  PowerTowerCli blocker --file threats.txt --block --all
+  PowerTowerCli blocker --blocked --view tree
+  PowerTowerCli blocker --blocked --select "kind equals domain" --unblock
+```
+
+### `reachability`
+
+```
+▌ REACHABILITY VERIFIER
+  Pull every IP and domain out of a file or a paste and check whether this machine can reach them: DNS,
+  ping, and the TCP ports you choose. Send the ones that answer straight to the blocker.
+
+usage:  PowerTowerCli reachability [options]
+
+options and actions
+  --file <path>                 targets from this file (any text); repeatable
+  --add <value>                 one domain or IP; repeatable
+  --stdin                       targets piped in
+  --ports <list>                TCP ports to connect to, comma-separated (default 80,443)
+  --timeout <seconds>           per-attempt timeout (default 3)
+  --parallel <n>                targets checked at once (default 32)
+  --no-ping                     skip the ICMP ping
+  --block                       send the ticked rows (or --all) to the blocker and block them
+
+columns of reachability   (tree view groups the rows)
+  target · kind · status · dns · ip (Resolves to) · ping · p80 (TCP 80) · p443 (TCP 443) ·
+  source (Source line)
+
+examples
+  PowerTowerCli reachability --add example.com --add 1.1.1.1 --ports 53,443
+  PowerTowerCli reachability --file targets.txt --where "status equals reachable" --csv reachable.csv
+  PowerTowerCli reachability --file targets.txt --select "status equals reachable" --block
+```
+
+### `connections`
+
+```
+▌ CONNECTIONS MONITOR
+  Every TCP and UDP endpoint this machine has open, live: process, ports, remote host and state. Closed
+  connections linger greyed for a while. Block a remote address in two clicks.
+
+usage:  PowerTowerCli connections [options]
+
+options and actions
+  --interval <1|2|5>            seconds between refreshes (default 1)
+  --duration <seconds>          stop after this long (default: until Ctrl+C on a console, one snapshot
+                                when piped)
+  --once                        one snapshot
+  --tcp                         TCP only
+  --udp                         UDP only
+  --established                 established connections only
+  --listening                   listening ports only
+  --other                       other states only
+  --loopback                    include loopback endpoints
+  --no-resolve                  do not resolve remote host names
+  --no-keep                     drop closed connections at once instead of keeping them 30 s
+  --process <name>              only processes whose name contains this
+  --block                       after the snapshot, block the remote IPs of the ticked rows (or --all)
+
+columns of connections   (tree view groups the rows)
+  proto · proc (Process) · pid · local · lport (L.port) · remote · rport (R.port) · host (Remote host) ·
+  state · first (First seen) · last (Last seen) · alive ()
+
+examples
+  PowerTowerCli connections --once
+  PowerTowerCli connections --established --process chrome --duration 20
+  PowerTowerCli connections --once --where "remote is not empty" --csv now.csv
+```
+
+### `firewall`
+
+```
+▌ FIREWALL RULES
+  Every Windows Firewall rule as a sortable table, with the risky ones flagged: inbound Allow rules open
+  to any address, rules that open all ports, or rules not tied to a program. The profile bar shows whether
+  the firewall is actually on.
+
+usage:  PowerTowerCli firewall [options]
+
+options and actions
+  --inbound                     inbound rules only
+  --outbound                    outbound rules only
+  --risky                       flagged rules only
+  --enabled                     enabled rules only
+
+columns of firewall-rules   (tree view groups the rows)
+  risk · name (Rule) · on (Enabled) · dir (Direction) · act (Action) · proto (Protocol) ·
+  lports (Local ports) · remote (Remote address) · profiles · why (Why flagged) · prog (Program) · group
+
+examples
+  PowerTowerCli firewall --risky
+  PowerTowerCli firewall --inbound --enabled --where "action equals allow" --sort name
+```
+
+### `resource-usage`
+
+```
+▌ RESOURCE USAGE
+  Which processes have used the most CPU time, memory and disk I/O since you opened this, not just right
+  now. Exited processes stay in the table, greyed, because their totals still count.
+
+usage:  PowerTowerCli resource-usage [options]
+
+options and actions
+  --interval <1|2|5>            seconds between samples (default 1)
+  --duration <seconds>          stop after this long (default: until Ctrl+C on a console, one sample when
+                                piped)
+  --once                        one sample (two readings a second apart)
+  --by-pid                      one row per process instead of grouping by name
+  --modules <pid>               list the DLLs loaded in one process with their signatures (Loaded
+                                modules…)
+  --end                         end the ticked processes (or --all): a kill, nothing is saved
+
+columns of process-hogs   (tree view groups the rows)
+  name (Process) · pid · cpu (CPU %) · cput (CPU time) · share · trend · mem (Memory) · peak ·
+  ior (Disk read) · iow (Disk write) · ion (I/O now) · state ()
+columns of modules-process   (tree view groups the rows)
+  name (Module) · sig (Signature) · where (Location) · company · path
+
+examples
+  PowerTowerCli resource-usage --once --top 15
+  PowerTowerCli resource-usage --by-pid --duration 30 --sort mem --desc
+  PowerTowerCli resource-usage --modules 4312
+```
+
+### `disk-usage`
+
+```
+▌ DISK USAGE
+  Scan a drive or a folder and see where the space went: the folder tree with sizes, the largest files,
+  the biggest folders, and what kinds of files they are. Open, copy or send the ones you pick to the
+  Recycle Bin.
+
+usage:  PowerTowerCli disk-usage [options]
+
+options and actions
+  --path <drive-or-folder>      what to scan (default: the first fixed drive)
+  --min-mb <n>                  only files at least this big are kept in the largest-files list (default
+                                50)
+  --show <files|folders|types>  largest files, folders, or file types (default files)
+  --recycle                     move the ticked rows (or --all) to the Recycle Bin
+
+columns of storage-largest-files   (tree view groups the rows)
+  name (File) · size · share (Of parent) · ext (Type) · mod (Modified) · path
+columns of storage-folders   (tree view groups the rows)
+  name (Folder) · size · share (Of parent) · files · subs (Folders) · depth · mod (Modified) · path
+columns of storage-file-types   (tree view groups the rows)
+  ext (Type) · bytes (Total size) · share · count (Files) · avg (Average)
+
+examples
+  PowerTowerCli disk-usage --path D:\ --show folders --view tree
+  PowerTowerCli disk-usage --path C:\Users --show types
+  PowerTowerCli disk-usage --path C:\Temp --select "size at least 1 GB" --recycle
+```
+
+### `deleted-files`
+
+```
+▌ DELETED FILES FINDER
+  administrator: yes
+  What was permanently deleted on each drive and whether it can come back: the NTFS change journal for C:,
+  the directory tables of exFAT externals, shadow copies, and files emptied from the Recycle Bin. Recover
+  the ones you pick to another drive.
+
+usage:  PowerTowerCli deleted-files [options]
+
+options and actions
+  --drives <letters>            drives to scan, e.g. C,E (default: every NTFS and exFAT drive)
+  --days <n>                    how far back (default 30)
+  --under <path>                only entries under this folder
+  --type <list>                 only these extensions, e.g. jpg,png,docx
+  --name <text>                 only names containing this
+  --min <n>                     minimum size in --unit (exFAT only; the journal records no size)
+  --max <n>                     maximum size in --unit
+  --unit <KB|MB|GB>             the unit of --min and --max (default MB)
+  --noise                       include temp files, caches and other noise
+  --no-shadows                  do not look for copies in shadow copies
+  --source <all|journal|exfat>  which source to show (default all)
+  --recoverable                 recoverable entries only
+  --recover-to <folder>         copy the ticked recoverable files (or --all) into this folder, on another
+                                drive
+
+columns of deleted-files   (tree view groups the rows)
+  when · type · rec (Recoverable) · path · size · state (Data) · source · note · times (×) ·
+  shadow (Shadow source) · recto (Recovered to)
+
+examples
+  PowerTowerCli deleted-files --days 7
+  PowerTowerCli deleted-files --drives E --type jpg,mp4 --recoverable
+  PowerTowerCli deleted-files --drives E --select "recoverable equals yes" --recover-to D:\recovered
+```
+
+### `file-explorer`
+
+```
+▌ FILE EXPLORER
+  Browse the machine, pick files across folders, and act on the whole selection at once: encrypt them with
+  a password, decrypt them back, or destroy them for good with a permanent delete or a secure wipe.
+  Encryption is AES-256; a lost password cannot be recovered.
+
+usage:  PowerTowerCli file-explorer [options]
+
+options and actions
+  --path <folder>               the folder to list (default: your profile)
+  --hidden                      show hidden and system entries
+  --encrypt                     encrypt the ticked files with a password to .enc and delete the originals
+  --decrypt                     decrypt the ticked .enc files next to themselves
+  --password <text>             the password for --encrypt / --decrypt (asked for when omitted)
+  --delete                      permanently delete the ticked entries (bypasses the Recycle Bin)
+  --wipe                        overwrite the ticked entries with random data, then delete them
+  --new-folder <name>           create a folder here first
+
+columns of folder   (tree view groups the rows)
+  name · type · size · mod (Modified) · sig (Signature) · attr (Attributes) · path
+
+examples
+  PowerTowerCli file-explorer --path C:\Users\alice\Documents
+  PowerTowerCli file-explorer --path .\drafts --select "type equals docx" --encrypt
+  PowerTowerCli file-explorer --path .\drafts --select "name ends with .enc" --decrypt
+```
+
+### `find-files`
+
+```
+▌ FIND FILES
+  Find files anywhere on the machine. By name: type a full or partial name, or a *.ext wildcard, and it
+  streams matches as it walks the drives. By hash: paste one or more MD5, SHA-1 or SHA-256 hashes and it
+  reports every file that matches, with a size cap so it stays fast.
+
+usage:  PowerTowerCli find-files [options]
+
+options and actions
+  --name <pattern>              search by name: a full or partial name, or a *.ext wildcard
+  --hash <hashes>               search by hash: MD5, SHA-1 or SHA-256, several separated by spaces;
+                                repeatable
+  --hash-file <path>            read hashes out of any text file (lists, CSV, IOC reports)
+  --in <root>                   where to search; repeatable (default: every fixed drive)
+  --match-case                  case-sensitive name match
+  --max-mb <n>                  skip files bigger than this when hashing (default 100)
+  --include-windows             hash inside the Windows folder too
+
+columns of find-by-name   (tree view groups the rows)
+  name · size · mod (Modified) · type · dir (Folder)
+columns of find-by-hash   (tree view groups the rows)
+  name (File) · algo (Algorithm) · hash (Matched hash) · size · mod (Modified) · path
+
+examples
+  PowerTowerCli find-files --name *.pfx
+  PowerTowerCli find-files --name invoice --in C:\Users --match-case
+  PowerTowerCli find-files --hash-file iocs.txt --in D:\ --csv hits.csv
+```
+
+### `duplicates`
+
+```
+▌ DUPLICATE FINDER
+  Find files whose contents are identical — grouped, with the space each group wastes. Compares by size
+  first, then hashes only the files that could match, so it is fast. Keep one copy and send the rest to
+  the Recycle Bin.
+
+usage:  PowerTowerCli duplicates [options]
+
+options and actions
+  --path <folder>               the folder to scan (default: your profile)
+  --min <size>                  ignore files smaller than this, e.g. 1KB, 100KB, 1MB, 10MB (default 100KB)
+  --recycle                     send the ticked files (or --all) to the Recycle Bin
+  --recycle-extras              send every extra copy to the Recycle Bin, keeping the oldest of each group
+
+columns of duplicates   (tree view groups the rows)
+  keep (Copy) · name · size · group · mod (Modified) · where (Location) · dir (Folder)
+
+examples
+  PowerTowerCli duplicates --path D:\Photos --min 1MB
+  PowerTowerCli duplicates --path D:\Photos --view tree
+  PowerTowerCli duplicates --path D:\Photos --recycle-extras
+```
+
+### `vulnerabilities`
+
+```
+▌ VULNERABILITY MANAGEMENT
+  Which CVEs this machine is exposed to and why: the OS build and installed hotfixes against Microsoft's
+  monthly security releases, installed software against the NVD, and what Windows Update is offering right
+  now. CISA's known-exploited list and EPSS rank the findings; every one shows its evidence.
+
+usage:  PowerTowerCli vulnerabilities [options]
+
+options and actions
+  --show <findings|missing|software|hotfixes>                                         which table (default
+                                                                                      findings)
+  --no-wua                                                                            skip Windows Update
+  --no-msrc                                                                           skip Microsoft's
+                                                                                      monthly CVEs
+  --no-nvd                                                                            skip third-party
+                                                                                      software (NVD)
+  --no-kev                                                                            skip CISA KEV
+  --no-epss                                                                           skip EPSS
+  --months <n>                                                                        monthly MSRC
+                                                                                      releases to check,
+                                                                                      newest first
+                                                                                      (default from
+                                                                                      settings, else 3)
+  --nvd-key <key>                                                                     an NVD API key
+                                                                                      (saved to
+                                                                                      settings.ini like
+                                                                                      the app does)
+  --severity <critical|high|medium>                                                   findings at least
+                                                                                      this severe
+  --status <open|all|vulnerable|update available|reboot pending|patched|unconfirmed>  finding status
+                                                                                      (default open)
+  --source <MSRC|NVD|Windows Update>                                                  finding source
+  --exploited                                                                         known-exploited
+                                                                                      findings only
+  --feeds                                                                             list the cached feed
+                                                                                      files and stop
+  --clear-feeds                                                                       delete the cached
+                                                                                      feeds and stop
+  --log                                                                               print the scan log
+
+columns of vulnerability-findings   (tree view groups the rows)
+  cve · sev (Severity) · cvss · kev (Exploited) · epss · status · product · inst (Installed) · fix ·
+  src (Source) · title · ev (Evidence) · rel (Release) · due (KEV due)
+columns of missing-updates   (tree view groups the rows)
+  kb · title · sev (Severity) · kind · cves · dl (Downloaded) · size · pub (Published) · reboot ·
+  cat (Categories)
+columns of installed-software   (tree view groups the rows)
+  name (Program) · ver (Version) · cves · cpe (NVD product) · status · pub (Publisher) · inst (Installed) ·
+  scope
+columns of hotfixes   (tree view groups the rows)
+  kb · src (Source) · when (Installed on) · result · desc (Description) · title
+
+examples
+  PowerTowerCli vulnerabilities 
+  PowerTowerCli vulnerabilities --show software --where "cves greater than 0"
+  PowerTowerCli vulnerabilities --status all --source MSRC --csv msrc.csv
+  PowerTowerCli vulnerabilities --no-wua --no-nvd --months 6 --exploited
+```
+
+### `software`
+
+```
+▌ SOFTWARE INVENTORY
+  Every program installed on this machine and its version. Scan for CVEs to flag the vulnerable ones with
+  their severity, worst CVE, whether it is known-exploited, and the version to upgrade to. Filter by
+  anything — vulnerable only, severity, publisher, or any column.
+
+usage:  PowerTowerCli software [options]
+
+options and actions
+  --scan                             look the mapped programs up on the NVD and flag the vulnerable ones
+  --nvd-key <key>                    an NVD API key (saved to settings.ini)
+  --no-kev                           skip CISA KEV
+  --no-epss                          skip EPSS
+  --severity <critical|high|medium>  programs whose worst CVE is at least this severe
+  --vulnerable                       vulnerable programs only
+  --exploited                        known-exploited only
+  --mapped                           only programs in the CVE product map
+
+columns of software-inventory   (tree view groups the rows)
+  name (Program) · ver (Version) · state (Vulnerable) · sev (Severity) · cvss · cves · worst (Worst CVE) ·
+  expl (Exploited) · epss · fix · pub (Publisher) · inst (Installed) · scope · cpe (NVD product) · status
+
+examples
+  PowerTowerCli software 
+  PowerTowerCli software --scan --vulnerable
+  PowerTowerCli software --scan --select "vulnerable equals vulnerable" --csv vulnerable.csv
+```
+
+### `autoruns`
+
+```
+▌ AUTORUNS
+  administrator: yes
+  Every place Windows starts a program on its own: run keys, startup folders, scheduled tasks, services,
+  Winlogon, image hijacks and WMI subscriptions. Each shows the program it runs, its signer and a risk
+  flag. Disable or delete what you don't want.
+
+usage:  PowerTowerCli autoruns [options]
+
+options and actions
+  --kind <name>                 one kind only, e.g. "Run key", "Scheduled task", Service
+  --risky                       flagged entries only
+  --unsigned                    unsigned or invalid signatures only
+  --non-microsoft               hide Microsoft-signed entries
+  --disable                     disable the ticked entries
+  --enable                      enable the ticked entries
+  --delete                      delete the ticked entries for good
+
+columns of autoruns   (tree view groups the rows)
+  risk · kind · name · on (Enabled) · sig (Signature) · where (Location on disk) · cmd (Command) ·
+  why (Why flagged) · desc (Description) · scope · loc (Registry / path)
+
+examples
+  PowerTowerCli autoruns --risky
+  PowerTowerCli autoruns --non-microsoft --view tree
+  PowerTowerCli autoruns --select "name equals backup-helper.exe" --disable
+```
+
+### `events`
+
+```
+▌ EVENT LOG TRIAGE
+  administrator: yes
+  The event-log records that matter for an incident: failed and successful logons, new services and
+  scheduled tasks, PowerShell activity, Defender detections, account changes and cleared logs. Pick a time
+  range and hunt across every column.
+
+usage:  PowerTowerCli events [options]
+
+options and actions
+  --since <1h|24h|7d|30d>       how far back (default 24h)
+  --max <50|100|250|500>        records per category (default 100)
+  --category <name>             one category only
+  --risky                       flagged events only
+
+columns of events   (tree view groups the rows)
+  time (When) · risk · cat (Category) · id (Event) · who (Account) · detail · level · src (Source) · log
+
+examples
+  PowerTowerCli events --since 7d --risky
+  PowerTowerCli events --category "Failed logon" --view tree
+  PowerTowerCli events --since 30d --csv events.csv
+```
+
+### `checklist`
+
+```
+▌ SECURITY CHECKLIST
+  administrator: yes
+  A pass or fail review of the most common endpoint audit items: default and blank-password accounts, disk
+  encryption, antivirus and EDR products with their state, remote-access and VPN tools, USB control and
+  the firewall. Each check shows its evidence; export the whole report as Markdown, JSON or PDF.
+
+usage:  PowerTowerCli checklist [options]
+
+options and actions
+  --category <name>                                   one category only
+  --show <everything|failures|fail|review|pass|info>  which results (default everything)
+  --active                                            also run the two active tests: the EICAR file drop
+                                                      and the application-control policy read (your
+                                                      antivirus will react on purpose)
+  --md <file>                                         save the report as Markdown
+  --json <file>                                       save the report as JSON
+  --pdf <file>                                        save the report as PDF
+  --log                                               print the run log
+
+columns of security-checklist   (tree view groups the rows)
+  cat (Category) · name (Check) · res (Result) · detail · ev (Evidence) · q (Question)
+
+examples
+  PowerTowerCli checklist 
+  PowerTowerCli checklist --show failures --view tree
+  PowerTowerCli checklist --active --md --pdf
+```
+
+### `secrets`
+
+```
+▌ SECRETS SCANNER
+  Search a folder or drive for exposed secrets: private keys, cloud API keys, tokens and passwords sitting
+  in .env and config files. Each hit shows the file, line and a masked preview — the whole secret is never
+  put on screen.
+
+usage:  PowerTowerCli secrets [options]
+
+options and actions
+  --path <folder>               the folder to scan (default: your profile)
+  --max-kb <256|1024|4096>      skip files bigger than this (default 1024)
+  --severity <high|medium>      high only, or medium and up
+  --writable                    hits in user-writable locations only
+
+columns of secrets   (tree view groups the rows)
+  sev (Severity) · kind · file · line · preview (Masked preview) · where (Location) · dir (Folder)
+
+examples
+  PowerTowerCli secrets --path C:\projects
+  PowerTowerCli secrets --path C:\projects --severity high --csv secrets.csv
+```
+
+### `credentials`
+
+```
+▌ WI-FI & CREDENTIALS
+  The secrets saved on this machine: Wi-Fi networks with their security type (weak ones flagged) and, when
+  elevated, the stored key; plus the Windows Credential Manager vault. Revealing a Wi-Fi key or a stored
+  secret is opt-in and confirmed.
+
+usage:  PowerTowerCli credentials [options]
+
+options and actions
+  --show <wifi|vault>           saved Wi-Fi networks or the Credential Manager vault (default wifi)
+  --reveal                      show the Wi-Fi keys / a masked preview of vault secrets (confirmed, as in
+                                the app)
+
+columns of wifi-networks   (tree view groups the rows)
+  ssid (Network (SSID)) · risk (Security risk) · sec (Security) · key · auto (Auto-connect) · why (Note) ·
+  scope (Stored for)
+columns of credential-vault   (tree view groups the rows)
+  target · user · type · secret · persist (Persistence) · when (Last written)
+
+examples
+  PowerTowerCli credentials 
+  PowerTowerCli credentials --reveal --csv wifi.csv
+  PowerTowerCli credentials --show vault --view tree
+```
+
+### `browsing`
+
+```
+▌ BROWSING DATA
+  History, downloads, searches and saved passwords from every browser on this machine — Chrome, Edge,
+  Brave and Firefox — read straight from their databases (including the Microsoft Store build of Firefox).
+  The Domains view ranks every site by visits. Passwords stay masked until you reveal them.
+
+usage:  PowerTowerCli browsing [options]
+
+options and actions
+  --show <history|domains|downloads|searches|passwords>  which table (default history)
+  --browser <label>                                      one browser profile whose label contains this,
+                                                         e.g. Chrome, Edge, Firefox
+  --max <1000|5000|20000|all>                            history rows per profile (default 5000)
+  --insecure                                             http (not https) rows only
+  --reveal                                               decrypt and show the saved passwords (confirmed,
+                                                         as in the app)
+
+columns of browsing-history   (tree view groups the rows)
+  when (Last visit) · visits · title · domain (Site) · url · browser
+columns of browsing-domains   (tree view groups the rows)
+  rank (#) · domain (Site) · visits · pages · bar (Share) · last (Last visit) · first (First visit) ·
+  browsers
+columns of browsing-downloads   (tree view groups the rows)
+  when · file · size · state · domain (From site) · url (Source URL) · path (Saved to) · browser
+columns of browsing-searches   (tree view groups the rows)
+  when · term (Search term) · domain (Engine / site) · url · browser
+columns of browsing-passwords   (tree view groups the rows)
+  site · user (Username) · pass (Password) · weak · when (Saved) · note · url · browser
+
+examples
+  PowerTowerCli browsing --show domains --top 25
+  PowerTowerCli browsing --show downloads --browser Edge
+  PowerTowerCli browsing --show passwords --reveal --csv logins.csv
+```
+
 ## Files
 
 ```
-Toolbox\PowerTower.exe   the app
-Toolbox\Program.cs            entry point; flags --tool <PanelName>, --selftest <report.txt>, --shots <folder>
+Toolbox\PowerTower.exe        the desktop app
+Toolbox\PowerTowerCli.exe     the same tools on the command line (PowerTowerCli <tool> --help)
+Toolbox\Program.cs            entry point of the app; flags --tool <PanelName>, --selftest <report.txt>, --shots <folder>
 Toolbox\Ui.cs                 theme, DataView (grid / details / tree, filter rules), step strip, selection bar, shell
+Toolbox\Table.cs              the UI-free view kit both exes share: Col, FilterRule, Csv, Settings, tones, the tool registry
+Toolbox\Columns.cs            every table of every tool, defined once (columns, tree grouping, row tone, export name)
+Toolbox\Cli.cs                the command line: argument parsing, the console grid / details / tree, --where / --select / --csv
+Toolbox\CliTools.cs           one command per tool, mirroring its panel's controls and actions
+Toolbox\samples\              sample input files (a block list, a list of domains and IPs) for the blocker and the verifier
 Toolbox\Panels.cs             blocker, reachability, connections, resource usage, disk usage, deleted files
 Toolbox\ReconPanel.cs         System Recon & Audit
 Toolbox\FilesPanel.cs         File Explorer and Find Files
@@ -406,11 +1110,11 @@ Toolbox\Vuln.cs               inventory, JSON reader, feeds (MSRC, NVD, KEV, EPS
 Toolbox\Files.cs              parallel file walker, AES file crypto, secure wipe, name/hash search
 Toolbox\Checklist.cs          the hardening checks and their report
 Toolbox\Tests.cs              engine tests (Tests.exe; exit code = failures)
+Toolbox\build.cmd             rebuilds the three exes with the C# compiler that ships in Windows
 Toolbox\crash.log             written only if something ever throws in the UI; the app stays open
-Toolbox\build.cmd             rebuilds both exes with the C# compiler that ships in Windows
 Toolbox\app.manifest          asInvoker + per-monitor DPI; embedded at build time
-Toolbox\settings.ini          created on first run: window size, last choices, NVD key (delete to reset)
-Toolbox\cache\                downloaded vulnerability feeds (safe to delete)
+Toolbox\settings.ini          created on first run: window size, last choices, NVD key (delete to reset); shared with the command line
+Toolbox\cache\                downloaded vulnerability feeds, shared with the command line (safe to delete)
 ```
 
 ## Rebuild after changing a `.cs` file
@@ -423,7 +1127,8 @@ Tests.exe
 ```
 
 It uses `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` (C# 5, .NET Framework 4.8); no SDK
-or Visual Studio needed. `Tests.exe` runs the engine tests without the UI; the ones that touch the
+or Visual Studio needed, and it builds all three: `PowerTower.exe`, `PowerTowerCli.exe` and `Tests.exe`.
+`Tests.exe` runs the engine tests without the UI; the ones that touch the
 machine are read-only (hosts-file edits happen on a temporary copy, the exFAT scan is capped, the
 feed tests are skipped offline). `PowerTower.exe --selftest report.txt` exercises every panel
 in the real UI - it loads real data into each tool, then switches every mode and view, sorts every

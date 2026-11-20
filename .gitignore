@@ -1,6 +1,7 @@
 # per-machine state and downloaded data - never commit
 Toolbox/settings.ini
 Toolbox/cache/
+Toolbox/reports/
 Toolbox/crash.log
 Toolbox/*.bak
 Toolbox/selftest*.txt
